@@ -287,17 +287,33 @@ struct QuotaBarUnitRunner {
         func order(_ preferences: QuotaBarPreferences) -> String { preferences.profiles.map(\.alias).joined() }
         var preferences = QuotaBarPreferences(profiles: accounts, primaryAccountID: accounts[2].id)
 
-        preferences.moveProfile(accounts[0].id, onto: accounts[2].id)
-        try expect(order(preferences) == "1203", "dropping on a later account lands after it")
-        preferences.moveProfile(accounts[3].id, onto: accounts[1].id)
-        try expect(order(preferences) == "3120", "dropping on an earlier account lands before it")
-        preferences.moveProfile(accounts[3].id, by: -1)
-        try expect(order(preferences) == "3120", "first stays first")
+        preferences.moveProfile(accounts[0].id, by: -1)
+        try expect(order(preferences) == "0123", "first stays first")
         preferences.moveProfile(accounts[1].id, by: 1)
-        try expect(order(preferences) == "3210", "move down one")
-        preferences.moveProfile(accounts[0].id, onto: accounts[0].id)
-        try expect(order(preferences) == "3210", "dropping on itself is a no-op")
+        try expect(order(preferences) == "0213", "move down one")
+        preferences.moveProfile(accounts[3].id, by: -1)
+        try expect(order(preferences) == "0231", "move up one")
         try expect(preferences.primaryAccountID == accounts[2].id, "reordering keeps the starred account")
+
+        // Dragging account 0 down past two rows of height 60 with 10 spacing.
+        var current = QuotaBarPreferences(profiles: accounts)
+        let heights = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, 60.0) })
+        var drag = ReorderDrag(id: accounts[0].id)
+        func dragTo(_ translation: Double) {
+            while let step = drag.update(translation: translation, order: current.profiles.map(\.id), heights: heights, spacing: 10) {
+                current.moveProfile(accounts[0].id, by: step)
+            }
+        }
+        dragTo(20)
+        try expect(order(current) == "0123" && drag.offset == 20, "short drag follows the pointer without swapping")
+        dragTo(40)
+        try expect(order(current) == "1023" && drag.offset == -30, "passing the midpoint swaps and keeps the row under the pointer")
+        dragTo(150)
+        try expect(order(current) == "1203", "a fast drag passes several rows")
+        dragTo(220)
+        try expect(order(current) == "1230", "and reaches the end")
+        dragTo(0)
+        try expect(order(current) == "0123" && drag.offset == 0, "dragging back restores the order")
     }
 
     private static func testLegacyStorageMigration() async throws {

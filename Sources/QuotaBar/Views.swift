@@ -6,7 +6,8 @@ struct UsagePopoverView: View {
     let addAccount: () -> Void
     let reauthenticate: (AccountProfile) -> Void
     @State private var expandedAccountIDs: Set<UUID> = []
-    @State private var dropTargetID: UUID?
+    @State private var reorder: ReorderDrag?
+    @State private var rowHeights: [UUID: CGFloat] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,7 +25,6 @@ struct UsagePopoverView: View {
                                 snapshot: store.snapshots[starred.id],
                                 isStarred: true,
                                 isExpanded: .constant(true),
-                                isDropTarget: false,
                                 isFeatured: true,
                                 star: {},
                                 reauthenticate: { reauthenticate(starred) }
@@ -39,22 +39,28 @@ struct UsagePopoverView: View {
                                 snapshot: store.snapshots[profile.id],
                                 isStarred: profile.id == store.primaryProfile?.id,
                                 isExpanded: expansionBinding(for: profile.id),
-                                isDropTarget: dropTargetID == profile.id,
                                 star: { store.makePrimary(profile.id) },
                                 reauthenticate: { reauthenticate(profile) }
                             )
-                            .draggable(profile.id.uuidString)
-                            .dropDestination(for: String.self) { items, _ in
-                                guard let id = items.first.flatMap(UUID.init(uuidString:)) else { return false }
-                                withAnimation(.snappy(duration: 0.2)) { store.moveProfile(id, onto: profile.id) }
-                                return true
-                            } isTargeted: { isTargeted in
-                                dropTargetID = isTargeted ? profile.id : (dropTargetID == profile.id ? nil : dropTargetID)
-                            }
+                            .reportHeight(for: profile.id)
+                            .reorderLift(isDragging: reorder?.id == profile.id, offset: reorder?.offset ?? 0)
+                            .simultaneousGesture(
+                                DragGesture(minimumDistance: 6, coordinateSpace: .named(Self.listSpace))
+                                    .onChanged { value in
+                                        dragRow(profile.id, translation: value.translation.height)
+                                    }
+                                    .onEnded { _ in
+                                        withAnimation(.snappy(duration: 0.2)) { reorder = nil }
+                                    }
+                            )
                         }
                     }
                 }
                 .padding(16)
+                .coordinateSpace(name: Self.listSpace)
+                .onPreferenceChange(RowHeightKey.self) { heights in
+                    rowHeights = heights
+                }
             }
 
 
@@ -75,6 +81,25 @@ struct UsagePopoverView: View {
 }
 
 extension UsagePopoverView {
+    private static let listSpace = "accountList"
+    private static let listSpacing: CGFloat = 10
+
+    /// Drag-to-reorder with a plain DragGesture. SwiftUI's draggable/dropDestination start a
+    /// system drag session, which the menu-bar window does not handle.
+    private func dragRow(_ id: UUID, translation: CGFloat) {
+        var drag = reorder?.id == id ? reorder! : ReorderDrag(id: id)
+        let heights = rowHeights.mapValues(Double.init)
+        while let step = drag.update(
+            translation: translation,
+            order: store.profiles.map(\.id),
+            heights: heights,
+            spacing: Self.listSpacing
+        ) {
+            withAnimation(.snappy(duration: 0.2)) { store.moveProfile(id, by: step) }
+        }
+        reorder = drag
+    }
+
     private func expansionBinding(for id: UUID) -> Binding<Bool> {
         Binding(
             get: { expandedAccountIDs.contains(id) },
@@ -227,7 +252,6 @@ private struct AccountCard: View {
     let snapshot: AccountUsageSnapshot?
     let isStarred: Bool
     @Binding var isExpanded: Bool
-    let isDropTarget: Bool
     /// The starred account's card above the list: always open, larger, not a list item.
     var isFeatured = false
     let star: () -> Void
@@ -245,7 +269,7 @@ private struct AccountCard: View {
         .background(background, in: RoundedRectangle(cornerRadius: isFeatured ? 16 : 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: isFeatured ? 16 : 14, style: .continuous)
-                .strokeBorder(borderColor, lineWidth: (isStarred && !isFeatured) || isDropTarget ? 1.5 : 1)
+                .strokeBorder(borderColor, lineWidth: isStarred && !isFeatured ? 1.5 : 1)
         }
         .opacity(profile.isEnabled ? 1 : 0.62)
     }
@@ -387,7 +411,6 @@ private struct AccountCard: View {
     }
 
     private var borderColor: Color {
-        if isDropTarget { return .accentColor }
         if isFeatured { return profile.provider.tint.opacity(0.18) }
         return isStarred ? profile.provider.tint.opacity(0.45) : .primary.opacity(0.07)
     }
@@ -498,6 +521,34 @@ private extension AccountUsageSnapshot {
     /// Buckets besides the main one, such as a model-scoped weekly limit.
     var extraBuckets: [RateLimitBucket] {
         rateLimitBuckets.filter { $0.limitId != primaryCodexBucket?.limitId }
+    }
+}
+
+private struct RowHeightKey: PreferenceKey {
+    static let defaultValue: [UUID: CGFloat] = [:]
+
+    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+private extension View {
+    func reportHeight(for id: UUID) -> some View {
+        background(GeometryReader { proxy in
+            Color.clear.preference(key: RowHeightKey.self, value: [id: proxy.size.height])
+        })
+    }
+
+    /// Lifts a dragged row and keeps its own moves unanimated so it stays under the pointer
+    /// while its neighbours slide out of the way.
+    func reorderLift(isDragging: Bool, offset: Double) -> some View {
+        self.offset(y: isDragging ? offset : 0)
+            .scaleEffect(isDragging ? 1.015 : 1)
+            .shadow(color: .black.opacity(isDragging ? 0.18 : 0), radius: isDragging ? 12 : 0, y: isDragging ? 5 : 0)
+            .zIndex(isDragging ? 1 : 0)
+            .transaction { transaction in
+                if isDragging { transaction.animation = nil }
+            }
     }
 }
 
@@ -1221,6 +1272,10 @@ private struct AccountsSettingsPage: View {
     @Binding var deletionCandidate: AccountProfile?
     let addAccount: () -> Void
     let reauthenticate: (AccountProfile) -> Void
+    @State private var reorder: ReorderDrag?
+    @State private var rowHeights: [UUID: CGFloat] = [:]
+    private static let listSpace = "settingsAccountList"
+    private static let listSpacing: CGFloat = 12
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1255,7 +1310,7 @@ private struct AccountsSettingsPage: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 46)
             } else {
-                VStack(spacing: 12) {
+                VStack(spacing: Self.listSpacing) {
                     ForEach(Array(store.profiles.enumerated()), id: \.element.id) { index, profile in
                         AccountSettingsRow(
                             profile: profile,
@@ -1270,19 +1325,39 @@ private struct AccountsSettingsPage: View {
                             rename: { store.rename(profile.id, to: $0) },
                             makePrimary: { store.makePrimary(profile.id) },
                             reauthenticate: { reauthenticate(profile) },
-                            remove: { deletionCandidate = profile }
+                            remove: { deletionCandidate = profile },
+                            reorderGesture: AnyGesture(
+                                DragGesture(minimumDistance: 2, coordinateSpace: .named(Self.listSpace))
+                                    .onChanged { value in dragRow(profile.id, translation: value.translation.height) }
+                                    .onEnded { _ in withAnimation(.snappy(duration: 0.2)) { reorder = nil } }
+                                    .map { _ in () }
+                            )
                         )
-                        .draggable(profile.id.uuidString)
-                        .dropDestination(for: String.self) { items, _ in
-                            guard let id = items.first.flatMap(UUID.init(uuidString:)) else { return false }
-                            withAnimation(.snappy(duration: 0.2)) { store.moveProfile(id, onto: profile.id) }
-                            return true
-                        }
+                        .reportHeight(for: profile.id)
+                        .reorderLift(isDragging: reorder?.id == profile.id, offset: reorder?.offset ?? 0)
                     }
+                }
+                .coordinateSpace(name: Self.listSpace)
+                .onPreferenceChange(RowHeightKey.self) { heights in
+                    rowHeights = heights
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func dragRow(_ id: UUID, translation: CGFloat) {
+        var drag = reorder?.id == id ? reorder! : ReorderDrag(id: id)
+        let heights = rowHeights.mapValues(Double.init)
+        while let step = drag.update(
+            translation: translation,
+            order: store.profiles.map(\.id),
+            heights: heights,
+            spacing: Self.listSpacing
+        ) {
+            withAnimation(.snappy(duration: 0.2)) { store.moveProfile(id, by: step) }
+        }
+        reorder = drag
     }
 }
 
@@ -1297,6 +1372,7 @@ private struct AccountSettingsRow: View {
     let makePrimary: () -> Void
     let reauthenticate: () -> Void
     let remove: () -> Void
+    let reorderGesture: AnyGesture<Void>
     @State private var draftAlias: String
     @FocusState private var aliasIsFocused: Bool
 
@@ -1310,7 +1386,8 @@ private struct AccountSettingsRow: View {
         rename: @escaping (String) -> Void,
         makePrimary: @escaping () -> Void,
         reauthenticate: @escaping () -> Void,
-        remove: @escaping () -> Void
+        remove: @escaping () -> Void,
+        reorderGesture: AnyGesture<Void>
     ) {
         self.profile = profile
         self.snapshot = snapshot
@@ -1322,12 +1399,25 @@ private struct AccountSettingsRow: View {
         self.makePrimary = makePrimary
         self.reauthenticate = reauthenticate
         self.remove = remove
+        self.reorderGesture = reorderGesture
         _draftAlias = State(initialValue: profile.alias)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 16, height: 38)
+                    .contentShape(Rectangle())
+                    .gesture(reorderGesture)
+                    .onHover { inside in
+                        if inside { NSCursor.openHand.push() } else { NSCursor.pop() }
+                    }
+                    .help("끌어서 순서 변경")
+                    .accessibilityHidden(true)
+
                 AccountAvatar(provider: profile.provider, snapshot: snapshot, size: 38)
 
                 VStack(alignment: .leading, spacing: 5) {
