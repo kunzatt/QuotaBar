@@ -121,11 +121,6 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    func moveProfile(_ accountID: UUID, onto targetID: UUID) {
-        preferences.moveProfile(accountID, onto: targetID)
-        persist()
-    }
-
     func moveProfile(_ accountID: UUID, by offset: Int) {
         preferences.moveProfile(accountID, by: offset)
         persist()

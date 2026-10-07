@@ -289,22 +289,43 @@ struct QuotaBarPreferences: Codable, Sendable {
     var customCodexExecutablePath: URL?
     var launchAtLogin: Bool = false
 
-    /// Drag-and-drop placement: dropping on a later account lands after it, on an earlier
-    /// one before it, which is where the pointer is in both cases.
-    mutating func moveProfile(_ id: UUID, onto targetID: UUID) {
-        guard id != targetID,
-              let source = profiles.firstIndex(where: { $0.id == id }),
-              let target = profiles.firstIndex(where: { $0.id == targetID }) else { return }
-        let profile = profiles.remove(at: source)
-        profiles.insert(profile, at: target)
-    }
-
     mutating func moveProfile(_ id: UUID, by offset: Int) {
         guard let source = profiles.firstIndex(where: { $0.id == id }) else { return }
         let target = min(max(source + offset, 0), profiles.count - 1)
         guard target != source else { return }
         let profile = profiles.remove(at: source)
         profiles.insert(profile, at: target)
+    }
+}
+
+/// Follows one dragged list row. The row stays under the pointer, and once it passes the
+/// midpoint of a neighbour the two swap; `offset` keeps the row where the pointer is after
+/// the list re-lays out around it.
+struct ReorderDrag: Sendable, Equatable {
+    let id: UUID
+    private(set) var offset: Double = 0
+    private var consumed: Double = 0
+
+    init(id: UUID) {
+        self.id = id
+    }
+
+    /// Returns -1 or 1 when the row should swap with the neighbour above or below. Call again
+    /// with the new order after each swap; a fast drag can pass several rows at once.
+    mutating func update(translation: Double, order: [UUID], heights: [UUID: Double], spacing: Double) -> Int? {
+        offset = translation - consumed
+        guard let index = order.firstIndex(of: id) else { return nil }
+        if index + 1 < order.count, let below = heights[order[index + 1]], offset > (below + spacing) / 2 {
+            consumed += below + spacing
+            offset -= below + spacing
+            return 1
+        }
+        if index > 0, let above = heights[order[index - 1]], offset < -(above + spacing) / 2 {
+            consumed -= above + spacing
+            offset += above + spacing
+            return -1
+        }
+        return nil
     }
 }
 
