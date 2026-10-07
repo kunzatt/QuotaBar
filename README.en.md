@@ -127,14 +127,16 @@ To use the default Codex login in `~/.codex`, choose **Register default ~/.codex
 2. Claude Code opens the browser. Sign in to the claude.ai account you want, and the login completes on its own. If the browser shows a code instead, paste it into the QuotaBar window and submit it.
 3. Each account uses its own `CLAUDE_CONFIG_DIR`, so logins never mix. To use the default login you already use in the terminal (`~/.claude`), choose **Use default ~/.claude** in Settings.
 
-Claude usage shows the five-hour and weekly limits side by side, and the headline number is whichever has less left. Per-model weekly limits appear under "추가 한도와 토큰" in the popover. Background refreshes run on the same schedule as Codex, but each account calls the unofficial API at most about once a minute. When the API answers 429, QuotaBar waits for the longer of `Retry-After` and a backoff that grows from 5 minutes to 1 hour.
+Claude usage shows the five-hour and weekly limits side by side, and the headline number is whichever has less left. Per-model weekly limits appear when you expand the card. Background refreshes run on the same schedule as Codex, but each account calls the unofficial API at most about once a minute. When the API answers 429, QuotaBar waits for the longer of `Retry-After` and a backoff that grows from 5 minutes to 1 hour.
 
 When an account requires a login, choose **Sign in again** from the usage popover or Settings to start Device Code Login. The existing profile and quota history stay in place; only the credentials for the account completed in the browser are refreshed.
 
-## Primary account and refreshes
+## Account list and refreshes
 
-- Use the star next to an account in the full panel or Settings to set the primary account. Clicking the row itself never changes this preference.
-- The menu bar and each account's headline number show the limit with the least left, the one that runs out first, labelled underneath (for example "주간 한도 기준"). The primary account card shows each limit as a bar with its reset time, and other account rows list every limit too.
+- The popover shows every account as a card, in your order. The starred (★) account is the one the menu bar shows, and starring never reorders the list.
+- Drag a card onto another to reorder. The Settings account list supports dragging too, plus Move Up and Move Down in each account's `…` menu.
+- Click a card to expand it for per-limit bars with reset times, model-scoped limits, token usage and connection state. The starred account starts expanded.
+- The menu bar and each account's headline number show the limit with the least left, the one that runs out first, labelled underneath (for example "주간 한도 기준"). Collapsed cards still list every limit as a compact bar.
 - Rate limits refresh every 30 seconds per account; token totals refresh every two minutes.
 - QuotaBar requests an account-token refresh only when it starts a new local app-server process; ordinary polling does not force a new login or token rotation.
 - When a request fails, the latest valid value remains visible and retries back off from 30 to 60, 120, and 300 seconds. All accounts refresh immediately after the Mac wakes from sleep.
