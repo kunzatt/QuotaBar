@@ -79,7 +79,7 @@ private struct QuotaBarMenuLabel: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            QuotaMenuGlyph()
+            QuotaMenuGlyph(remainingPercent: store.primarySnapshot?.remainingPercent)
             Text(title)
                 .font(.system(size: 13, weight: .regular))
                 .monospacedDigit()
@@ -118,21 +118,36 @@ private struct QuotaBarMenuLabel: View {
 
 /// The QuotaBar gauge as a monochrome menu-bar template, matching the app icon.
 private struct QuotaMenuGlyph: View {
+    let remainingPercent: Int?
+
     var body: some View {
-        Image(nsImage: Self.templateImage)
+        Image(nsImage: remainingPercent.map { Self.images[min(100, max(0, $0))] } ?? Self.emptyImage)
             .resizable()
             .interpolation(.high)
             .frame(width: 17.5, height: 15)
         .accessibilityHidden(true)
     }
 
-    private static let templateImage: NSImage = {
-        // The view box is wider than the gauge on purpose: MenuBarExtra can collapse SwiftUI
-        // padding in its label, but it keeps transparent pixels inside the image.
+    // Cache the small set of integer percentages rather than parsing SVG on each update.
+    private static let images = (0...100).map { makeImage(percent: $0) }
+    private static let emptyImage = makeImage(percent: 0)
+
+    private static func makeImage(percent: Int) -> NSImage {
+        let start = 135.0 * Double.pi / 180
+        let end = (135.0 + 270.0 * Double(percent) / 100) * Double.pi / 180
+        let x = 9.5 + 7.2 * cos(end)
+        let y = 10.5 + 7.2 * sin(end)
+        let startX = 9.5 + 7.2 * cos(start)
+        let startY = 10.5 + 7.2 * sin(start)
+        let largeArc = percent > 66 ? 1 : 0
+        // The transparent right margin keeps the gap before the menu-bar percentage.
+        let foreground = percent == 0 ? "" : """
+          <path d="M\(startX) \(startY) A7.2 7.2 0 \(largeArc) 1 \(x) \(y)" fill="none" stroke="#000" stroke-width="2.3" stroke-linecap="round"/>
+        """
         let svg = """
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 23.333333 20">
-          <path d="M4.4 15.6 A7.2 7.2 0 1 1 14.6 15.6" fill="none" stroke="#000" stroke-opacity="0.38" stroke-width="2.3" stroke-linecap="round"/>
-          <path d="M4.4 15.6 A7.2 7.2 0 0 1 13.1 4.2" fill="none" stroke="#000" stroke-width="2.3" stroke-linecap="round"/>
+          <path d="M\(startX) \(startY) A7.2 7.2 0 1 1 14.591168824543143 15.591168824543141" fill="none" stroke="#000" stroke-opacity="0.38" stroke-width="2.3" stroke-linecap="round"/>
+          \(foreground)
           <circle cx="9.5" cy="10.5" r="2.1" fill="#000"/>
         </svg>
         """
@@ -142,5 +157,5 @@ private struct QuotaMenuGlyph: View {
         image.size = NSSize(width: 17.5, height: 15)
         image.isTemplate = true
         return image
-    }()
+    }
 }
