@@ -2,16 +2,16 @@
 set -euo pipefail
 
 cd "${0:A:h:h}"
-test_dir=$(mktemp -d /private/tmp/codexbar-unit-tests.XXXXXX)
+test_dir=$(mktemp -d /private/tmp/quotabar-unit-tests.XXXXXX)
 trap 'rm -rf "$test_dir"' EXIT
 
 swiftc -parse-as-library \
-  Sources/CodexBar/Models.swift \
-  Sources/CodexBar/Protocol.swift \
-  Sources/CodexBar/Services.swift \
-  Sources/CodexBar/CodexAppServerClient.swift \
-  Sources/CodexBar/ClaudeUsageClient.swift \
-  Tests/CodexBarTests/CodexBarUnitRunner.swift \
-  -o "$test_dir/CodexBarUnitRunner"
+  Sources/QuotaBar/Models.swift \
+  Sources/QuotaBar/Protocol.swift \
+  Sources/QuotaBar/Services.swift \
+  Sources/QuotaBar/CodexAppServerClient.swift \
+  Sources/QuotaBar/ClaudeUsageClient.swift \
+  Tests/QuotaBarTests/QuotaBarUnitRunner.swift \
+  -o "$test_dir/QuotaBarUnitRunner"
 
-"$test_dir/CodexBarUnitRunner"
+"$test_dir/QuotaBarUnitRunner"

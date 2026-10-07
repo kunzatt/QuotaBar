@@ -1,4 +1,4 @@
-# CodexBar 아키텍처
+# QuotaBar 아키텍처
 
 ```text
 SwiftUI MenuBarExtra (.window)
@@ -38,7 +38,7 @@ SwiftUI `MenuBarExtra`의 `.window` 스타일이 메뉴바 항목과 popover-lik
 Claude Code에는 app-server 같은 사용량 프로토콜이 없습니다. `ClaudeUsageClient` actor가 계정마다 하나씩 있고, 상주 프로세스 없이 다음 순서로 동작합니다.
 
 1. `/usr/bin/security`로 Claude Code의 Keychain 항목을 읽습니다. 이름은 `Claude Code-credentials`이고, `CLAUDE_CONFIG_DIR`을 쓰는 계정은 그 경로의 SHA-256 앞 8자리가 뒤에 붙습니다. Keychain에 없으면 `<config>/.credentials.json`을 읽습니다.
-2. 액세스 토큰이 2분 안에 만료되거나 API가 거부하면 Ptah 수집기와 같은 방식으로 갱신합니다. `Application Support/CodexBar/ClaudeRenewal/<UUID>` 빈 임시 프로필에서 `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`·`CLAUDE_CODE_OAUTH_SCOPES`·`BROWSER=false`로 `claude auth login --claudeai`를 실행합니다. 실패한 교환에서 CLI가 자기 프로필을 비울 수 있기 때문에 원래 프로필을 넘기지 않습니다.
+2. 액세스 토큰이 2분 안에 만료되거나 API가 거부하면 Ptah 수집기와 같은 방식으로 갱신합니다. `Application Support/QuotaBar/ClaudeRenewal/<UUID>` 빈 임시 프로필에서 `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`·`CLAUDE_CODE_OAUTH_SCOPES`·`BROWSER=false`로 `claude auth login --claudeai`를 실행합니다. 실패한 교환에서 CLI가 자기 프로필을 비울 수 있기 때문에 원래 프로필을 넘기지 않습니다.
    - 새 액세스 토큰·refresh token·미래 만료 시각·scope가 모두 있어야 성공으로 봅니다. 그동안 원래 항목이 바뀌었으면(Claude Code가 갱신했거나 다시 로그인) 덮어쓰지 않습니다.
    - 성공하면 원래 문서의 `claudeAiOauth`만 교체해 Claude Code와 같은 `security -i` `add-generic-password -U`로 씁니다. 실패하면 원래 로그인은 그대로 두고 5분부터 1시간까지 backoff합니다. `invalid_grant`일 때만 로그인 필요로 전환합니다.
    - 임시 프로필 폴더와 그 Keychain 항목은 결과와 상관없이 지웁니다.
@@ -54,7 +54,7 @@ Claude Code에는 app-server 같은 사용량 프로토콜이 없습니다. `Cla
 
 ## 저장 및 삭제 안전성
 
-`AccountRepository`는 `accounts.json`을 원자적으로 저장합니다. 앱 관리 프로필 삭제는 `Accounts/<UUID>/codex-home`와 정확히 일치하는 경로인지 확인한 후 그 UUID 폴더만 제거합니다. Application Support 전체나 `~/.codex`를 재귀 삭제하지 않습니다.
+`AccountRepository`는 `accounts.json`을 원자적으로 저장합니다. 이름을 바꾸기 전의 `Application Support/CodexBar`가 남아 있고 `QuotaBar`가 없으면 첫 실행 때 폴더를 그대로 옮기고, 앱 관리 프로필 경로를 새 위치로 고칩니다. Claude 프로필은 Keychain 항목 이름이 폴더 경로에 따라 정해지므로 새 경로의 항목으로 옮깁니다. 앱 관리 프로필 삭제는 `Accounts/<UUID>/codex-home`와 정확히 일치하는 경로인지 확인한 후 그 UUID 폴더만 제거합니다. Application Support 전체나 `~/.codex`를 재귀 삭제하지 않습니다.
 
 ## 검증 경계
 

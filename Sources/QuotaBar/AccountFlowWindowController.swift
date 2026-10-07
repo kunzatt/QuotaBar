@@ -18,7 +18,7 @@ final class AccountFlowWindowController: NSObject, NSWindowDelegate {
             return
         }
         show(
-            title: "CodexBar 계정 연결",
+            title: "QuotaBar 계정 연결",
             rootView: AnyView(
                 AddAccountView(store: store, onClose: { [weak self] in
                     self?.close()
@@ -33,7 +33,7 @@ final class AccountFlowWindowController: NSObject, NSWindowDelegate {
             return
         }
         show(
-            title: "CodexBar 다시 로그인",
+            title: "QuotaBar 다시 로그인",
             rootView: AnyView(
                 ReauthenticateAccountView(store: store, profile: profile, onClose: { [weak self] in
                     self?.close()

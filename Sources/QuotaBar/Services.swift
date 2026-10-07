@@ -2,40 +2,75 @@ import Foundation
 
 actor AccountRepository {
     private let rootURL: URL
+    private let legacyRootURL: URL?
     private let preferencesURL: URL
-    private var preferences = CodexBarPreferences()
+    private var preferences = QuotaBarPreferences()
 
-    init(rootURL: URL? = nil) {
-        let defaultRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("CodexBar", isDirectory: true)
+    /// Before the QuotaBar rename the app stored everything in Application Support/CodexBar.
+    init(rootURL: URL? = nil, legacyRootURL: URL? = nil) {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let defaultRoot = support.appendingPathComponent("QuotaBar", isDirectory: true)
         self.rootURL = rootURL ?? defaultRoot
+        self.legacyRootURL = legacyRootURL ?? (rootURL == nil ? support.appendingPathComponent("CodexBar", isDirectory: true) : nil)
         self.preferencesURL = (rootURL ?? defaultRoot).appendingPathComponent("accounts.json")
     }
 
-    func bootstrap() throws {
+    func bootstrap() async throws {
+        try await migrateLegacyRoot()
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: rootURL.path)
         if FileManager.default.fileExists(atPath: preferencesURL.path) {
             do {
-                preferences = try JSONDecoder.codexBar.decode(CodexBarPreferences.self, from: Data(contentsOf: preferencesURL))
+                preferences = try JSONDecoder.quotaBar.decode(QuotaBarPreferences.self, from: Data(contentsOf: preferencesURL))
             } catch {
                 // Metadata is non-sensitive. A damaged file is preserved for inspection and the app recovers empty.
-                preferences = CodexBarPreferences()
+                preferences = QuotaBarPreferences()
             }
         }
     }
 
     func rootDirectory() -> URL { rootURL }
-    func currentPreferences() -> CodexBarPreferences { preferences }
+    func currentPreferences() -> QuotaBarPreferences { preferences }
 
-    func save(_ newPreferences: CodexBarPreferences) throws -> CodexBarPreferences {
+    /// Moves the pre-rename data folder once and points managed profiles at their new
+    /// location. Codex profiles keep their files in the folder; a Claude profile's Keychain
+    /// item is keyed by its folder path, so it moves to the new path's item.
+    private func migrateLegacyRoot() async throws {
+        let manager = FileManager.default
+        guard let legacyRootURL,
+              !manager.fileExists(atPath: rootURL.path),
+              manager.fileExists(atPath: legacyRootURL.path) else { return }
+        try manager.createDirectory(at: rootURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try manager.moveItem(at: legacyRootURL, to: rootURL)
+
+        guard let data = try? Data(contentsOf: preferencesURL),
+              var migrated = try? JSONDecoder.quotaBar.decode(QuotaBarPreferences.self, from: data) else { return }
+        let legacyPrefix = legacyRootURL.standardizedFileURL.path + "/"
+        var movedClaudeHomes: [(old: String, new: String)] = []
+        for index in migrated.profiles.indices where migrated.profiles[index].isManagedByApp {
+            let oldPath = migrated.profiles[index].codexHomePath.standardizedFileURL.path
+            guard oldPath.hasPrefix(legacyPrefix) else { continue }
+            let newHome = rootURL.appendingPathComponent(String(oldPath.dropFirst(legacyPrefix.count)), isDirectory: true)
+            migrated.profiles[index].codexHomePath = newHome
+            if migrated.profiles[index].provider == .claude {
+                movedClaudeHomes.append((oldPath, newHome.path))
+            }
+        }
+        preferences = migrated
+        try persist()
+        for home in movedClaudeHomes {
+            await ClaudeCredentialStore.moveManagedItem(fromConfigDirectory: home.old, toConfigDirectory: home.new)
+        }
+    }
+
+    func save(_ newPreferences: QuotaBarPreferences) throws -> QuotaBarPreferences {
         preferences = newPreferences
         try persist()
         return preferences
     }
 
     private func persist() throws {
-        let data = try JSONEncoder.codexBar.encode(preferences)
+        let data = try JSONEncoder.quotaBar.encode(preferences)
         try data.write(to: preferencesURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: preferencesURL.path)
     }
@@ -112,7 +147,7 @@ enum ProfileManager {
         let expectedHome = expected.appendingPathComponent(managedHomeDirectoryName(for: profile.provider), isDirectory: true)
         guard resolvedHome == expectedHome.standardizedFileURL.path,
               resolvedExpected.hasPrefix(repositoryRoot.standardizedFileURL.path + "/") else {
-            throw CodexBarError.invalidProfilePath
+            throw QuotaBarError.invalidProfilePath
         }
         return expected
     }
@@ -136,8 +171,8 @@ struct CodexExecutableLocator: Sendable {
         let pathEntries = ProcessInfo.processInfo.environment["PATH"]?.split(separator: ":") ?? []
         candidates += pathEntries.map { URL(fileURLWithPath: String($0)).appendingPathComponent("codex") }
         if let match = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) { return match }
-        if let configuredURL { throw CodexBarError.executableNotUsable(configuredURL) }
-        throw CodexBarError.executableNotFound
+        if let configuredURL { throw QuotaBarError.executableNotUsable(configuredURL) }
+        throw QuotaBarError.executableNotFound
     }
 
     func version(at executable: URL) throws -> String {
@@ -148,7 +183,7 @@ struct CodexExecutableLocator: Sendable {
         process.standardOutput = output
         try process.run()
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw CodexBarError.executableNotUsable(executable) }
+        guard process.terminationStatus == 0 else { throw QuotaBarError.executableNotUsable(executable) }
         return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -315,7 +350,7 @@ enum PollingPolicy {
     }
 }
 
-enum CodexBarFormatters {
+enum QuotaBarFormatters {
     static let token: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
@@ -394,7 +429,7 @@ enum RedactingLogger {
 }
 
 private extension JSONDecoder {
-    static var codexBar: JSONDecoder {
+    static var quotaBar: JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
@@ -402,7 +437,7 @@ private extension JSONDecoder {
 }
 
 private extension JSONEncoder {
-    static var codexBar: JSONEncoder {
+    static var quotaBar: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
