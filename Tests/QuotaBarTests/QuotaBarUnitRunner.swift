@@ -280,10 +280,25 @@ struct QuotaBarUnitRunner {
             try ProfileManager.removeManagedProfile(moved, repositoryRoot: root)
         }
 
-        // Once QuotaBar exists, a leftover CodexBar folder is left alone.
+        // Once QuotaBar has accounts, a leftover CodexBar folder is left alone.
         try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: legacy.appendingPathComponent("accounts.json"))
         try await AccountRepository(rootURL: root, legacyRootURL: legacy).bootstrap()
-        try expect(FileManager.default.fileExists(atPath: legacy.path), "no second migration")
+        try expect(FileManager.default.fileExists(atPath: legacy.appendingPathComponent("accounts.json").path), "no second migration")
+
+        // A QuotaBar folder holding only scratch data still receives the legacy accounts.
+        let otherBase = base.appendingPathComponent("second", isDirectory: true)
+        let otherLegacy = otherBase.appendingPathComponent("CodexBar", isDirectory: true)
+        let otherRoot = otherBase.appendingPathComponent("QuotaBar", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherLegacy.appendingPathComponent("ClaudeRenewal"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: otherRoot.appendingPathComponent("ClaudeRenewal"), withIntermediateDirectories: true)
+        _ = try await AccountRepository(rootURL: otherLegacy).save(QuotaBarPreferences(profiles: [external], primaryAccountID: external.id))
+        let merged = AccountRepository(rootURL: otherRoot, legacyRootURL: otherLegacy)
+        try await merged.bootstrap()
+        let mergedPreferences = await merged.currentPreferences()
+        try expect(mergedPreferences.primaryAccountID == external.id, "accounts moved into existing folder")
+        try expect(FileManager.default.fileExists(atPath: otherLegacy.appendingPathComponent("ClaudeRenewal").path), "clashing entry kept in legacy folder")
+        try expect(!FileManager.default.fileExists(atPath: otherLegacy.appendingPathComponent("accounts.json").path), "accounts no longer in legacy folder")
     }
 
     private static func testProfileProviderDecoding() throws {
@@ -436,8 +451,11 @@ struct QuotaBarUnitRunner {
         // A valid token is returned as is.
         try writeLive(accessToken: "access-old", expiresIn: 3_600)
         try setMode("success")
-        let fresh = ClaudeUsageClient(profile: profile, executableURL: fakeCLI)
-        let scratchBefore = (try? FileManager.default.contentsOfDirectory(atPath: ClaudeProfilePaths.renewalRoot.path)) ?? []
+        let scratchRoot = root.appendingPathComponent("ClaudeRenewal", isDirectory: true)
+        func client() -> ClaudeUsageClient {
+            ClaudeUsageClient(profile: profile, executableURL: fakeCLI, renewalRoot: scratchRoot)
+        }
+        let fresh = client()
         let untouched = try await fresh.usableCredentials(rejecting: nil)
         try expect(untouched.accessToken == "access-old", "valid token untouched")
         try expect(calls() == 0, "no renewal for a valid token")
@@ -450,19 +468,19 @@ struct QuotaBarUnitRunner {
         try expect(written["claudeAiOauth"]?["refreshToken"]?.string == "refresh-new", "rotation written back")
         try expect(written["claudeAiOauth"]?["rateLimitTier"]?.string == "default_claude_max_20x", "other OAuth fields kept")
         try expect(written["mcpOAuth"]?["server"]?["accessToken"]?.string == "mcp", "rest of the document kept")
-        let scratchAfter = (try? FileManager.default.contentsOfDirectory(atPath: ClaudeProfilePaths.renewalRoot.path)) ?? []
-        try expect(Set(scratchAfter) == Set(scratchBefore), "scratch profile removed")
+        let scratchAfter = (try? FileManager.default.contentsOfDirectory(atPath: scratchRoot.path)) ?? []
+        try expect(scratchAfter.isEmpty, "scratch profile removed")
 
         // A rejected but unexpired token is renewed too.
         try writeLive(accessToken: "access-old", expiresIn: 3_600)
-        let afterRejection = try await ClaudeUsageClient(profile: profile, executableURL: fakeCLI).usableCredentials(rejecting: "access-old")
+        let afterRejection = try await client().usableCredentials(rejecting: "access-old")
         try expect(afterRejection.accessToken == "access-new", "rejected token renewed")
 
         // A transient failure keeps the live login and backs off.
         try writeLive(accessToken: "access-old", expiresIn: -60)
         let before = try Data(contentsOf: live)
         try setMode("transient")
-        let transient = ClaudeUsageClient(profile: profile, executableURL: fakeCLI)
+        let transient = client()
         let callsBefore = calls()
         do {
             _ = try await transient.usableCredentials(rejecting: nil)
@@ -478,7 +496,7 @@ struct QuotaBarUnitRunner {
         // A revoked grant asks for sign-in and still keeps the live document.
         try setMode("revoked")
         do {
-            _ = try await ClaudeUsageClient(profile: profile, executableURL: fakeCLI).usableCredentials(rejecting: nil)
+            _ = try await client().usableCredentials(rejecting: nil)
             throw TestFailure("revoked grant must throw")
         } catch let error as QuotaBarError {
             try expect(error == .authenticationRequired, "invalid_grant needs sign-in")
