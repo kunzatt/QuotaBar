@@ -133,9 +133,9 @@ When an account requires a login, choose **Sign in again** from the usage popove
 
 ## Account list and refreshes
 
-- The popover shows every account as a card, in your order. The starred (★) account is the one the menu bar shows, and starring never reorders the list.
+- The top of the popover shows a large card for the starred (★) account, with a bar and reset time per limit; the menu bar shows the same account. Below it, every account is listed in your order, and starring only fills the star without reordering.
 - Drag a card onto another to reorder. The Settings account list supports dragging too, plus Move Up and Move Down in each account's `…` menu.
-- Click a card to expand it for per-limit bars with reset times, model-scoped limits, token usage and connection state. The starred account starts expanded.
+- Click a card in the list to expand it for per-limit bars with reset times, model-scoped limits and connection state.
 - The menu bar and each account's headline number show the limit with the least left, the one that runs out first, labelled underneath (for example "주간 한도 기준"). Collapsed cards still list every limit as a compact bar.
 - Rate limits refresh every 30 seconds per account; token totals refresh every two minutes.
 - QuotaBar requests an account-token refresh only when it starts a new local app-server process; ordinary polling does not force a new login or token rotation.

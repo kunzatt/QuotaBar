@@ -6,7 +6,6 @@ struct UsagePopoverView: View {
     let addAccount: () -> Void
     let reauthenticate: (AccountProfile) -> Void
     @State private var expandedAccountIDs: Set<UUID> = []
-    @State private var didExpandStarredAccount = false
     @State private var dropTargetID: UUID?
 
     var body: some View {
@@ -19,7 +18,20 @@ struct UsagePopoverView: View {
                     if store.profiles.isEmpty {
                         EmptyDashboard(addAccount: addAccount)
                     } else {
-                        SectionTitle(title: "계정 \(store.profiles.count)개", detail: "★ 계정이 메뉴바에 표시 · 끌어서 순서 변경")
+                        if let starred = store.primaryProfile {
+                            AccountCard(
+                                profile: starred,
+                                snapshot: store.snapshots[starred.id],
+                                isStarred: true,
+                                isExpanded: .constant(true),
+                                isDropTarget: false,
+                                isFeatured: true,
+                                star: {},
+                                reauthenticate: { reauthenticate(starred) }
+                            )
+                            .padding(.bottom, 6)
+                        }
+                        SectionTitle(title: "계정 \(store.profiles.count)개", detail: "★ 계정이 위와 메뉴바에 표시 · 끌어서 순서 변경")
                         // The order is the user's; starring an account never moves it.
                         ForEach(store.profiles) { profile in
                             AccountCard(
@@ -44,8 +56,7 @@ struct UsagePopoverView: View {
                 }
                 .padding(16)
             }
-            .onAppear(perform: expandStarredAccountOnce)
-            .onChange(of: store.isBootstrapped) { _, _ in expandStarredAccountOnce() }
+
 
             Divider()
             PopoverFooter(addAccount: addAccount)
@@ -73,12 +84,6 @@ extension UsagePopoverView {
         )
     }
 
-    /// Opens the starred account the first time accounts are known; afterwards the user decides.
-    private func expandStarredAccountOnce() {
-        guard !didExpandStarredAccount, let starred = store.primaryProfile else { return }
-        expandedAccountIDs.insert(starred.id)
-        didExpandStarredAccount = true
-    }
 }
 
 private struct PopoverHeader: View {
@@ -216,47 +221,53 @@ private struct EmptyDashboard: View {
 }
 
 /// One account in the popover. Collapsed it shows every limit compactly; expanded it adds
-/// reset times, extra limits, token usage and the connection state.
+/// reset times, extra limits and the connection state.
 private struct AccountCard: View {
     let profile: AccountProfile
     let snapshot: AccountUsageSnapshot?
     let isStarred: Bool
     @Binding var isExpanded: Bool
     let isDropTarget: Bool
+    /// The starred account's card above the list: always open, larger, not a list item.
+    var isFeatured = false
     let star: () -> Void
     let reauthenticate: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: isFeatured ? 14 : 12) {
             header
             if isExpanded {
                 details
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(12)
-        .background(background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(isFeatured ? 16 : 12)
+        .background(background, in: RoundedRectangle(cornerRadius: isFeatured ? 16 : 14, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(borderColor, lineWidth: isStarred || isDropTarget ? 1.5 : 1)
+            RoundedRectangle(cornerRadius: isFeatured ? 16 : 14, style: .continuous)
+                .strokeBorder(borderColor, lineWidth: (isStarred && !isFeatured) || isDropTarget ? 1.5 : 1)
         }
         .opacity(profile.isEnabled ? 1 : 0.62)
     }
 
     private var header: some View {
-        HStack(spacing: 11) {
-            AccountAvatar(provider: profile.provider, snapshot: snapshot, size: 36)
+        HStack(spacing: isFeatured ? 12 : 11) {
+            AccountAvatar(provider: profile.provider, snapshot: snapshot, size: isFeatured ? 42 : 36)
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: isFeatured ? 3 : 5) {
                 HStack(spacing: 6) {
                     Text(profile.alias)
-                        .font(.subheadline.weight(.semibold))
+                        .font(isFeatured ? .headline : .subheadline.weight(.semibold))
                         .lineLimit(1)
                         .layoutPriority(1)
-                    Text(planBadgeText(profile: profile, snapshot: snapshot))
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(profile.provider.tint)
-                        .lineLimit(1)
+                    if isFeatured {
+                        PlanBadge(text: planBadgeText(profile: profile, snapshot: snapshot), tint: profile.provider.tint)
+                    } else {
+                        Text(planBadgeText(profile: profile, snapshot: snapshot))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(profile.provider.tint)
+                            .lineLimit(1)
+                    }
                     if !profile.isEnabled {
                         Text("꺼짐")
                             .font(.caption2.weight(.semibold))
@@ -284,30 +295,39 @@ private struct AccountCard: View {
 
             VStack(alignment: .trailing, spacing: 0) {
                 Text(snapshot?.remainingPercent.map { "\($0)%" } ?? "—")
-                    .font(.title3.weight(.semibold).monospacedDigit())
+                    .font(isFeatured
+                        ? .system(size: 30, weight: .bold, design: .rounded).monospacedDigit()
+                        : .title3.weight(.semibold).monospacedDigit())
                     .foregroundStyle(profile.isEnabled ? usageColor(snapshot?.remainingPercent) : Color.secondary)
                 if let window = snapshot?.limitingWindow {
-                    Text(QuotaBarFormatters.windowLabel(window.windowDurationMinutes))
+                    Text(isFeatured
+                        ? "\(QuotaBarFormatters.windowLabel(window.windowDurationMinutes)) 한도 기준"
+                        : QuotaBarFormatters.windowLabel(window.windowDurationMinutes))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            Button(action: star) {
-                Image(systemName: isStarred ? "star.fill" : "star")
-                    .foregroundStyle(isStarred ? Color.yellow : Color.secondary)
-                    .frame(width: 24, height: 24)
+            if !isFeatured {
+                Button(action: star) {
+                    Image(systemName: isStarred ? "star.fill" : "star")
+                        .foregroundStyle(isStarred ? Color.yellow : Color.secondary)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.borderless)
+                .disabled(!profile.isEnabled && !isStarred)
+                .help(isStarred ? "메뉴바에 표시 중인 계정" : "메뉴바에 이 계정 표시")
+                .accessibilityLabel(isStarred ? "\(profile.alias), 메뉴바에 표시 중" : "\(profile.alias)을 메뉴바에 표시")
             }
-            .buttonStyle(.borderless)
-            .disabled(!profile.isEnabled && !isStarred)
-            .help(isStarred ? "메뉴바에 표시 중인 계정" : "메뉴바에 이 계정 표시")
-            .accessibilityLabel(isStarred ? "\(profile.alias), 메뉴바에 표시 중" : "\(profile.alias)을 메뉴바에 표시")
         }
         .contentShape(Rectangle())
         .onTapGesture {
+            guard !isFeatured else { return }
             withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
         }
-        .accessibilityAction(named: isExpanded ? "접기" : "펼치기") { isExpanded.toggle() }
+        .accessibilityAction(named: isExpanded ? "접기" : "펼치기") {
+            if !isFeatured { isExpanded.toggle() }
+        }
     }
 
     private var details: some View {
@@ -318,9 +338,6 @@ private struct AccountCard: View {
             }
             ForEach(extraLimitRows) { row in
                 LimitBar(row: row, isLimiting: false)
-            }
-            if let snapshot, snapshot.hasTokenSummary {
-                TokenSummaryCard(summary: snapshot.tokenSummary)
             }
 
             HStack(spacing: 6) {
@@ -360,7 +377,7 @@ private struct AccountCard: View {
     }
 
     private var background: some ShapeStyle {
-        isStarred
+        isFeatured
             ? AnyShapeStyle(LinearGradient(
                 colors: [profile.provider.tint.opacity(0.12), profile.provider.tint.opacity(0.03)],
                 startPoint: .topLeading,
@@ -371,7 +388,8 @@ private struct AccountCard: View {
 
     private var borderColor: Color {
         if isDropTarget { return .accentColor }
-        return isStarred ? profile.provider.tint.opacity(0.35) : .primary.opacity(0.07)
+        if isFeatured { return profile.provider.tint.opacity(0.18) }
+        return isStarred ? profile.provider.tint.opacity(0.45) : .primary.opacity(0.07)
     }
 }
 
@@ -480,50 +498,6 @@ private extension AccountUsageSnapshot {
     /// Buckets besides the main one, such as a model-scoped weekly limit.
     var extraBuckets: [RateLimitBucket] {
         rateLimitBuckets.filter { $0.limitId != primaryCodexBucket?.limitId }
-    }
-
-    var hasTokenSummary: Bool {
-        tokenSummary.lifetimeTokens != nil || tokenSummary.latestDailyBucket?.tokens != nil || tokenSummary.peakDailyTokens != nil
-    }
-}
-
-private struct TokenSummaryCard: View {
-    let summary: TokenUsageSummary
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text("토큰 사용")
-                .font(.subheadline.weight(.semibold))
-            HStack(spacing: 0) {
-                TokenMetric(
-                    label: QuotaBarFormatters.dailyUsageLabel(for: summary.latestDailyBucket?.startDate),
-                    value: summary.latestDailyBucket?.tokens
-                )
-                Divider().frame(height: 30)
-                TokenMetric(label: "누적", value: summary.lifetimeTokens)
-                Divider().frame(height: 30)
-                TokenMetric(label: "최대 일간", value: summary.peakDailyTokens)
-            }
-        }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-}
-
-private struct TokenMetric: View {
-    let label: String
-    let value: Int64?
-
-    var body: some View {
-        VStack(spacing: 2) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(QuotaBarFormatters.tokenText(value))
-                .font(.subheadline.weight(.medium).monospacedDigit())
-                .help(QuotaBarFormatters.fullTokenText(value))
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 
