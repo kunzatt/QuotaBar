@@ -21,8 +21,7 @@ struct UsagePopoverView: View {
                             reauthenticate: { reauthenticate(primary) }
                         )
 
-                        if let snapshot = store.primarySnapshot,
-                           !snapshot.rateLimitBuckets.isEmpty {
+                        if let snapshot = store.primarySnapshot, snapshot.hasExtraDetails {
                             QuotaDetailsSection(snapshot: snapshot, isExpanded: $showsDetails)
                         }
 
@@ -210,40 +209,57 @@ private struct PrimaryQuotaCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 16) {
-                RemainingRing(window: snapshot?.activeCodexWindow, size: 90, lineWidth: 9, font: .title3.weight(.bold))
+            HStack(alignment: .center, spacing: 12) {
+                AccountAvatar(provider: profile.provider, snapshot: snapshot, size: 42)
 
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 7) {
                         Text(profile.alias)
                             .font(.headline)
                             .lineLimit(1)
-                        PlanBadge(text: planBadgeText(profile: profile, snapshot: snapshot))
+                        PlanBadge(text: planBadgeText(profile: profile, snapshot: snapshot), tint: profile.provider.tint)
                     }
-
                     if let email = snapshot?.identity.email {
                         Text(email)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
-
-                    Text(activeResetSummary(snapshot))
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(2)
-
-                    HStack(spacing: 6) {
-                        StatusLabel(snapshot: snapshot)
-                        Text("·")
-                            .foregroundStyle(.tertiary)
-                        Text(QuotaBarFormatters.fetchedText(snapshot?.fetchedAt))
-                            .lineLimit(1)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 }
-                Spacer(minLength: 0)
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(snapshot?.remainingPercent.map { "\($0)%" } ?? "—")
+                        .font(.system(size: 30, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(usageColor(snapshot?.remainingPercent))
+                    if let window = snapshot?.limitingWindow {
+                        Text("\(QuotaBarFormatters.windowLabel(window.windowDurationMinutes)) 한도 기준")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityElement(children: .combine)
             }
+
+            let rows = limitRows(snapshot)
+            if !rows.isEmpty {
+                VStack(spacing: 11) {
+                    ForEach(rows) { row in
+                        LimitBar(row: row, isLimiting: rows.count > 1 && row.window == snapshot?.limitingWindow)
+                    }
+                }
+            }
+
+            HStack(spacing: 6) {
+                StatusLabel(snapshot: snapshot)
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("\(QuotaBarFormatters.fetchedText(snapshot?.fetchedAt)) 갱신")
+                    .lineLimit(1)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             if snapshot?.connectionState == .authRequired {
                 InlineNotice(
@@ -255,18 +271,12 @@ private struct PrimaryQuotaCard: View {
                 )
             } else if let error = snapshot?.lastError {
                 InlineNotice(text: error, symbol: "exclamationmark.triangle", tint: .orange)
-            } else if snapshot?.isPlusFiveHourWindowMissing == true {
-                InlineNotice(
-                    text: "Plus 5시간 한도 정보가 Codex 응답에 없어 주간 한도만 표시합니다.",
-                    symbol: "info.circle",
-                    tint: .orange
-                )
             }
         }
         .padding(16)
         .background(
             LinearGradient(
-                colors: [Color.accentColor.opacity(0.13), Color.accentColor.opacity(0.035)],
+                colors: [profile.provider.tint.opacity(0.13), profile.provider.tint.opacity(0.03)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
@@ -274,47 +284,108 @@ private struct PrimaryQuotaCard: View {
         )
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.accentColor.opacity(0.14), lineWidth: 1)
+                .strokeBorder(profile.provider.tint.opacity(0.16), lineWidth: 1)
         }
     }
 }
 
-private struct RemainingRing: View {
+/// One limit to show for an account. A nil window is a limit the plan has but the server
+/// did not report, shown as a placeholder instead of an invented number.
+private struct LimitRow: Identifiable {
+    let label: String
     let window: RateLimitWindow?
-    let size: CGFloat
-    let lineWidth: CGFloat
-    let font: Font
+    var id: String { label }
+}
+
+private func limitRows(_ snapshot: AccountUsageSnapshot?) -> [LimitRow] {
+    guard let snapshot else { return [] }
+    var rows = snapshot.displayWindows.map {
+        LimitRow(label: QuotaBarFormatters.windowLabel($0.windowDurationMinutes), window: $0)
+    }
+    if snapshot.isPlusFiveHourWindowMissing {
+        rows.insert(LimitRow(label: "5시간", window: nil), at: 0)
+    }
+    return rows
+}
+
+/// A labelled bar for one limit: what is left and when it refills.
+private struct LimitBar: View {
+    let row: LimitRow
+    let isLimiting: Bool
 
     var body: some View {
-        ZStack {
-            Circle()
-                .stroke(.primary.opacity(0.08), lineWidth: lineWidth)
-            Circle()
-                .trim(from: 0, to: progress)
-                .stroke(
-                    usageColor(window?.remainingPercent),
-                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
-                )
-                .rotationEffect(.degrees(-90))
-            VStack(spacing: 0) {
-                Text(window.map { "\($0.remainingPercent)%" } ?? "—")
-                    .font(font)
-                    .monospacedDigit()
-                if size > 70 {
-                    Text(quotaWindowTitle(window))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 9) {
+                Text(row.label)
+                    .font(.caption.weight(isLimiting ? .bold : .medium))
+                    .foregroundStyle(isLimiting ? Color.primary : Color.secondary)
+                    .frame(width: 40, alignment: .leading)
+                QuotaMeter(remaining: row.window?.remainingPercent)
+                    .frame(height: 7)
+                Text(row.window.map { "\($0.remainingPercent)%" } ?? "—")
+                    .font(.callout.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(row.window == nil ? Color.secondary : usageColor(row.window?.remainingPercent))
+                    .frame(width: 44, alignment: .trailing)
+            }
+            Text(row.window.map { resetLine($0) } ?? "Codex 응답에 이 한도가 없어 값을 표시하지 않습니다")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.leading, 49)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(row.window.map { "\(row.label) 한도 \($0.remainingPercent)퍼센트 남음, \(resetLine($0))" } ?? "\(row.label) 한도 정보 없음")
+    }
+}
+
+/// A compact bar for account rows.
+private struct MiniLimit: View {
+    let row: LimitRow
+    let isLimiting: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(row.label)
+                .font(.caption2.weight(isLimiting ? .bold : .regular))
+                .foregroundStyle(isLimiting ? Color.primary : Color.secondary)
+            QuotaMeter(remaining: row.window?.remainingPercent)
+                .frame(width: 34, height: 4)
+            Text(row.window.map { "\($0.remainingPercent)%" } ?? "—")
+                .font(.caption2.weight(.semibold).monospacedDigit())
+                .foregroundStyle(row.window == nil ? Color.secondary : usageColor(row.window?.remainingPercent))
+        }
+        .fixedSize()
+    }
+}
+
+private struct MiniLimits: View {
+    let snapshot: AccountUsageSnapshot?
+
+    var body: some View {
+        let rows = limitRows(snapshot)
+        HStack(spacing: 10) {
+            ForEach(rows) { row in
+                MiniLimit(row: row, isLimiting: rows.count > 1 && row.window == snapshot?.limitingWindow)
+            }
+        }
+        .help(windowResetSummary(snapshot) ?? "")
+    }
+}
+
+private struct QuotaMeter: View {
+    let remaining: Int?
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.primary.opacity(0.09))
+                if let remaining, remaining > 0 {
+                    Capsule()
+                        .fill(usageColor(remaining))
+                        .frame(width: max(proxy.size.height, proxy.size.width * CGFloat(remaining) / 100))
                 }
             }
         }
-        .frame(width: size, height: size)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(remainingAccessibilityText(window?.remainingPercent, window: window))
-    }
-
-    private var progress: CGFloat {
-        guard let remaining = window?.remainingPercent else { return 0 }
-        return CGFloat(remaining) / 100
     }
 }
 
@@ -328,32 +399,46 @@ private struct OtherAccountRow: View {
         HStack(spacing: 11) {
             AccountAvatar(provider: profile.provider, snapshot: snapshot, size: 34)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Text(profile.alias)
-                        .font(.subheadline.weight(.medium))
+                        .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
-                    Text(profile.provider.shortName)
+                        .layoutPriority(1)
+                    Text(planBadgeText(profile: profile, snapshot: snapshot))
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(profile.provider.tint)
+                        .lineLimit(1)
                     if !profile.isEnabled {
                         Text("꺼짐")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
                 }
-                Text(accountSecondaryText(profile: profile, snapshot: snapshot))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(snapshot?.connectionState == .authRequired ? Color.orange : Color.secondary)
-                    .lineLimit(1)
-                    .help(windowResetSummary(snapshot) ?? "")
+                if let status = rowStatusText(profile: profile, snapshot: snapshot) {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(snapshot?.connectionState == .authRequired ? Color.orange : Color.secondary)
+                        .lineLimit(1)
+                } else {
+                    MiniLimits(snapshot: snapshot)
+                }
             }
+            // Without this the spacer splits the free width with the name and truncates it.
+            .layoutPriority(1)
 
             Spacer(minLength: 6)
 
-            Text(snapshot?.remainingPercent.map { "\($0)%" } ?? "—")
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .foregroundStyle(profile.isEnabled ? Color.primary : Color.secondary)
+            VStack(alignment: .trailing, spacing: 0) {
+                Text(snapshot?.remainingPercent.map { "\($0)%" } ?? "—")
+                    .font(.title3.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(profile.isEnabled ? usageColor(snapshot?.remainingPercent) : Color.secondary)
+                if let window = snapshot?.limitingWindow {
+                    Text(QuotaBarFormatters.windowLabel(window.windowDurationMinutes))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             if snapshot?.connectionState == .authRequired {
                 Button(action: reauthenticate) {
@@ -380,6 +465,19 @@ private struct OtherAccountRow: View {
     }
 }
 
+private extension AccountUsageSnapshot {
+    /// Buckets besides the main one, such as a model-scoped weekly limit.
+    var extraBuckets: [RateLimitBucket] {
+        rateLimitBuckets.filter { $0.limitId != primaryCodexBucket?.limitId }
+    }
+
+    var hasTokenSummary: Bool {
+        tokenSummary.lifetimeTokens != nil || tokenSummary.latestDailyBucket?.tokens != nil || tokenSummary.peakDailyTokens != nil
+    }
+
+    var hasExtraDetails: Bool { !extraBuckets.isEmpty || hasTokenSummary }
+}
+
 private struct QuotaDetailsSection: View {
     let snapshot: AccountUsageSnapshot
     @Binding var isExpanded: Bool
@@ -387,22 +485,20 @@ private struct QuotaDetailsSection: View {
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(spacing: 10) {
-                ForEach(snapshot.rateLimitBuckets) { bucket in
+                ForEach(snapshot.extraBuckets) { bucket in
                     QuotaBucketCard(bucket: bucket)
                 }
-                if snapshot.tokenSummary.lifetimeTokens != nil ||
-                    snapshot.tokenSummary.latestDailyBucket?.tokens != nil ||
-                    snapshot.tokenSummary.peakDailyTokens != nil {
+                if snapshot.hasTokenSummary {
                     TokenSummaryCard(summary: snapshot.tokenSummary)
                 }
             }
             .padding(.top, 10)
         } label: {
             HStack {
-                Label("제한별 상세", systemImage: "chart.xyaxis.line")
+                Label("추가 한도와 토큰", systemImage: "chart.xyaxis.line")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                Text("\(snapshot.rateLimitBuckets.count)개")
+                Text(snapshot.extraBuckets.isEmpty ? "토큰" : "\(snapshot.extraBuckets.count)개")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -550,14 +646,25 @@ private struct StatusLabel: View {
 
 private struct PlanBadge: View {
     let text: String
+    let tint: Color
 
     var body: some View {
         Text(text)
             .font(.caption2.weight(.bold))
-            .foregroundStyle(Color.accentColor)
-            .padding(.horizontal, 6)
+            .foregroundStyle(tint)
+            .padding(.horizontal, 7)
             .padding(.vertical, 2)
-            .background(Color.accentColor.opacity(0.12), in: Capsule())
+            .background(tint.opacity(0.13), in: Capsule())
+    }
+}
+
+extension AccountProvider {
+    /// Service colour for badges and card tints: Claude's terracotta, Codex's ink.
+    var tint: Color {
+        switch self {
+        case .codex: Color(nsColor: .labelColor)
+        case .claude: Color(red: 0.80, green: 0.42, blue: 0.29)
+        }
     }
 }
 
@@ -1328,7 +1435,7 @@ private struct AccountSettingsRow: View {
                         if isPrimary {
                             SettingsPill(text: "대표", tint: .yellow)
                         }
-                        SettingsPill(text: profile.provider.shortName, tint: .secondary)
+                        SettingsPill(text: planBadgeText(profile: profile, snapshot: snapshot), tint: profile.provider.tint)
                         SettingsPill(text: profile.isManagedByApp ? "앱 관리" : "외부", tint: .secondary)
                     }
 
@@ -1337,6 +1444,10 @@ private struct AccountSettingsRow: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                    }
+
+                    if !limitRows(snapshot).isEmpty {
+                        MiniLimits(snapshot: snapshot)
                     }
 
                     Text(snapshot?.lastError ?? statusDetail)
@@ -1349,8 +1460,16 @@ private struct AccountSettingsRow: View {
                 Spacer(minLength: 8)
 
                 VStack(alignment: .trailing, spacing: 7) {
-                    Text(snapshot?.remainingPercent.map { "\($0)%" } ?? "—")
-                        .font(.title3.weight(.semibold).monospacedDigit())
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text(snapshot?.remainingPercent.map { "\($0)%" } ?? "—")
+                            .font(.title3.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(usageColor(snapshot?.remainingPercent))
+                        if let window = snapshot?.limitingWindow {
+                            Text(QuotaBarFormatters.windowLabel(window.windowDurationMinutes))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     Toggle("활성", isOn: $isEnabled)
                         .toggleStyle(.switch)
                         .labelsHidden()
@@ -1421,8 +1540,7 @@ private struct AccountSettingsRow: View {
     private var statusDetail: String {
         let status = snapshot?.connectionState.displayName ?? "대기 중"
         let fetched = QuotaBarFormatters.fetchedText(snapshot?.fetchedAt)
-        let summary = windowSummary(snapshot).map { "\($0) · " } ?? ""
-        return "\(summary)\(status) · 마지막 갱신 \(fetched)"
+        return "\(status) · \(fetched) 갱신"
     }
 
     private func commitAlias() {
@@ -1646,63 +1764,31 @@ private struct SettingsPill: View {
     }
 }
 
-private func activeResetSummary(_ snapshot: AccountUsageSnapshot?) -> String {
-    guard let window = snapshot?.activeCodexWindow else {
-        return snapshot?.connectionState.displayName ?? "사용량을 불러오는 중"
-    }
-    return "\(quotaWindowTitle(window)) · 초기화 \(QuotaBarFormatters.resetText(window.resetsAt))"
-}
-
 private func planBadgeText(profile: AccountProfile, snapshot: AccountUsageSnapshot?) -> String {
     guard let planName = snapshot?.identity.planName else { return profile.provider.shortName }
     return "\(profile.provider.shortName) \(planName)"
 }
 
-private func shortResetText(_ date: Date?) -> String {
-    guard let date else { return "초기화 미상" }
-    let relative = RelativeDateTimeFormatter()
-    relative.locale = .current
-    return relative.localizedString(for: date, relativeTo: .now)
-}
-
-private func accountSecondaryText(profile: AccountProfile, snapshot: AccountUsageSnapshot?) -> String {
+/// Shown instead of the limit bars when the account has nothing current to show.
+private func rowStatusText(profile: AccountProfile, snapshot: AccountUsageSnapshot?) -> String? {
     guard profile.isEnabled else { return "갱신 중지됨" }
     if snapshot?.connectionState == .authRequired { return "로그인 필요" }
-    if let windows = windowSummary(snapshot) {
-        // One window leaves room for its reset time; several keep their resets in the tooltip.
-        var text = windows
-        if snapshot?.primaryCodexBucket?.windows.count == 1, let reset = snapshot?.activeCodexWindow?.resetsAt {
-            text += " · 초기화 \(shortResetText(reset))"
-        }
-        return snapshot?.connectionState == .stale ? "오래된 정보 · \(text)" : text
-    }
-    if snapshot?.connectionState == .stale { return "오래된 정보" }
-    if let reset = snapshot?.activeCodexWindow?.resetsAt {
-        return "초기화 \(shortResetText(reset))"
-    }
-    return snapshot?.connectionState.displayName ?? "사용량 없음"
+    if limitRows(snapshot).isEmpty { return snapshot?.connectionState.displayName ?? "사용량 없음" }
+    return nil
 }
 
-/// Every window of the account's main bucket, shortest first, e.g. "5시간 84% · 주간 35%".
-/// Accounts other than the primary show only one number, so the row names each limit.
-private func windowSummary(_ snapshot: AccountUsageSnapshot?) -> String? {
-    guard let windows = snapshot?.primaryCodexBucket?.windows, !windows.isEmpty else { return nil }
-    return windows
-        .sorted { ($0.windowDurationMinutes ?? .max) < ($1.windowDurationMinutes ?? .max) }
-        .map { "\(windowLabel($0.windowDurationMinutes)) \($0.remainingPercent)%" }
-        .joined(separator: " · ")
+private func resetLine(_ window: RateLimitWindow) -> String {
+    let countdown = QuotaBarFormatters.resetCountdown(window.resetsAt)
+    guard window.resetsAt != nil, let clock = QuotaBarFormatters.resetClock(window.resetsAt) else { return countdown }
+    return "\(countdown) 초기화 · \(clock)"
 }
 
 private func windowResetSummary(_ snapshot: AccountUsageSnapshot?) -> String? {
-    guard let windows = snapshot?.primaryCodexBucket?.windows, !windows.isEmpty else { return nil }
+    let windows = snapshot?.displayWindows ?? []
+    guard !windows.isEmpty else { return nil }
     return windows
-        .sorted { ($0.windowDurationMinutes ?? .max) < ($1.windowDurationMinutes ?? .max) }
-        .map { "\(windowLabel($0.windowDurationMinutes)) 초기화 \(QuotaBarFormatters.resetText($0.resetsAt))" }
+        .map { "\(QuotaBarFormatters.windowLabel($0.windowDurationMinutes)) \($0.remainingPercent)% · \(resetLine($0))" }
         .joined(separator: "\n")
-}
-
-private func windowLabel(_ minutes: Int?) -> String {
-    minutes == 7 * 24 * 60 ? "주간" : QuotaBarFormatters.windowText(minutes)
 }
 
 private func remainingAccessibilityText(_ remaining: Int?, window: RateLimitWindow?) -> String {

@@ -127,14 +127,14 @@ To use the default Codex login in `~/.codex`, choose **Register default ~/.codex
 2. Claude Code opens the browser. Sign in to the claude.ai account you want, and the login completes on its own. If the browser shows a code instead, paste it into the QuotaBar window and submit it.
 3. Each account uses its own `CLAUDE_CONFIG_DIR`, so logins never mix. To use the default login you already use in the terminal (`~/.claude`), choose **Use default ~/.claude** in Settings.
 
-Claude usage shows the five-hour and weekly limits. The menu bar shows what is left of the five-hour limit, and any per-model weekly limits appear as separate rows in the popover. Background refreshes run on the same schedule as Codex, but each account calls the unofficial API at most about once a minute. When the API answers 429, QuotaBar waits for the longer of `Retry-After` and a backoff that grows from 5 minutes to 1 hour.
+Claude usage shows the five-hour and weekly limits side by side, and the headline number is whichever has less left. Per-model weekly limits appear under "추가 한도와 토큰" in the popover. Background refreshes run on the same schedule as Codex, but each account calls the unofficial API at most about once a minute. When the API answers 429, QuotaBar waits for the longer of `Retry-After` and a backoff that grows from 5 minutes to 1 hour.
 
 When an account requires a login, choose **Sign in again** from the usage popover or Settings to start Device Code Login. The existing profile and quota history stay in place; only the credentials for the account completed in the browser are refreshed.
 
 ## Primary account and refreshes
 
 - Use the star next to an account in the full panel or Settings to set the primary account. Clicking the row itself never changes this preference.
-- The menu-bar item prefers the primary account's `codex` bucket. If unavailable, it uses the first available bucket.
+- The menu bar and each account's headline number show the limit with the least left, the one that runs out first, labelled underneath (for example "주간 한도 기준"). The primary account card shows each limit as a bar with its reset time, and other account rows list every limit too.
 - Rate limits refresh every 30 seconds per account; token totals refresh every two minutes.
 - QuotaBar requests an account-token refresh only when it starts a new local app-server process; ordinary polling does not force a new login or token rotation.
 - When a request fails, the latest valid value remains visible and retries back off from 30 to 60, 120, and 300 seconds. All accounts refresh immediately after the Mac wakes from sleep.
@@ -159,7 +159,7 @@ Claude Code accounts are the exception. To call the usage API, QuotaBar uses `/u
 ## Known limitations
 
 - `codex app-server` is experimental in the Codex CLI. A CLI update may change response schemas, so raw JSON is isolated at the `ProtocolMapper` boundary.
-- The Plus five-hour limit is shown when the Codex response includes a 300-minute bucket. If the server returns only the weekly bucket, QuotaBar does not estimate the missing value and shows the weekly limit with an explanation.
+- The Codex Plus five-hour limit shows a value when the Codex response includes a 300-minute bucket. If the server returns only the weekly bucket, QuotaBar does not estimate it; the five-hour row stays visible marked as not reported.
 - Version 1 covers ChatGPT Codex usage only. API costs, other plan-specific optimisations, automatic account switching, and automatic reset-credit spending are out of scope.
 - The Claude usage API is unofficial. If Anthropic changes its format or authentication, Claude account refreshes may stop. Codex accounts are unaffected.
 - Per-account Claude Keychain items follow Claude Code's current naming rule (`Claude Code-credentials-<first 8 hex digits of SHA-256 of CLAUDE_CONFIG_DIR>`). If Claude Code changes that rule, the affected account shows as needing sign-in.

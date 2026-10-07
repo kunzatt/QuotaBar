@@ -252,11 +252,24 @@ struct AccountUsageSnapshot: Codable, Identifiable, Hashable, Sendable {
         rateLimitBuckets.first(where: { $0.limitId.lowercased() == "codex" }) ?? rateLimitBuckets.first
     }
 
-    /// The shortest active Codex quota is the one most likely to block the next
-    /// request, such as a short rolling Codex quota window.
-    var activeCodexWindow: RateLimitWindow? { primaryCodexBucket?.shortestWindow }
+    /// The main bucket's windows, shortest first (for example 5시간, then 주간).
+    var displayWindows: [RateLimitWindow] {
+        (primaryCodexBucket?.windows ?? []).sorted {
+            ($0.windowDurationMinutes ?? .max) < ($1.windowDurationMinutes ?? .max)
+        }
+    }
 
-    var remainingPercent: Int? { activeCodexWindow?.remainingPercent }
+    /// The window with the least left is the one that blocks the next request first, so
+    /// it is the number the menu bar and account rows lead with. Ties go to the shorter window.
+    var limitingWindow: RateLimitWindow? {
+        displayWindows.min { lhs, rhs in
+            lhs.remainingPercent != rhs.remainingPercent
+                ? lhs.remainingPercent < rhs.remainingPercent
+                : (lhs.windowDurationMinutes ?? .max) < (rhs.windowDurationMinutes ?? .max)
+        }
+    }
+
+    var remainingPercent: Int? { limitingWindow?.remainingPercent }
 
     /// ChatGPT Plus currently may return only the weekly bucket even when a
     /// five-hour limit applies. Keep that distinction explicit instead of inventing
