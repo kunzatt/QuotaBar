@@ -8,7 +8,8 @@ struct QuotaBarUnitRunner {
             ("initialize response decoding", testInitializeResponse),
             ("notification between responses", testNotification),
             ("rate limit mapping", testRateLimitMapping),
-            ("shortest quota window selection", testShortestQuotaWindowSelection),
+            ("limiting quota window selection", testShortestQuotaWindowSelection),
+            ("Korean reset formatting", testKoreanResetFormatting),
             ("null-heavy payload", testNullPayload),
             ("Int64 token usage", testTokenUsage),
             ("malformed JSONL recovery", testMalformedJSONL),
@@ -94,9 +95,34 @@ struct QuotaBarUnitRunner {
             planType: nil,
             rateLimitReachedType: nil
         )
+        try expect(bucket.shortestWindow?.windowDurationMinutes == 300, "shortest window")
         let snapshot = AccountUsageSnapshot(accountID: UUID(), rateLimitBuckets: [bucket])
-        try expect(snapshot.activeCodexWindow?.windowDurationMinutes == 300, "five-hour window wins")
-        try expect(snapshot.remainingPercent == 85, "status uses five-hour remaining")
+        try expect(snapshot.displayWindows.map(\.windowDurationMinutes) == [300, 10_080], "shortest first for display")
+        try expect(snapshot.limitingWindow?.windowDurationMinutes == 10_080, "the window with least left limits")
+        try expect(snapshot.remainingPercent == 41, "status leads with the limiting window")
+
+        let tied = RateLimitBucket(
+            limitId: "claude", displayName: "Claude",
+            primary: RateLimitWindow(usedPercent: 30, windowDurationMinutes: 300),
+            secondary: RateLimitWindow(usedPercent: 30, windowDurationMinutes: 10_080),
+            hasCredits: nil, unlimitedCredits: nil, creditBalance: nil, spendControlReached: nil, planType: nil, rateLimitReachedType: nil
+        )
+        let tiedSnapshot = AccountUsageSnapshot(accountID: UUID(), rateLimitBuckets: [tied])
+        try expect(tiedSnapshot.limitingWindow?.windowDurationMinutes == 300, "ties go to the shorter window")
+    }
+
+    private static func testKoreanResetFormatting() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Seoul")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 7, hour: 12, minute: 42))!
+        try expect(QuotaBarFormatters.resetCountdown(now.addingTimeInterval(38 * 60), now: now) == "38분 후", "minutes")
+        try expect(QuotaBarFormatters.resetCountdown(now.addingTimeInterval(5 * 3_600 + 20 * 60), now: now) == "5시간 20분 후", "hours")
+        try expect(QuotaBarFormatters.resetCountdown(now.addingTimeInterval(2 * 86_400 + 3 * 3_600), now: now) == "2일 3시간 후", "days")
+        try expect(QuotaBarFormatters.resetCountdown(now.addingTimeInterval(-10), now: now) == "곧 초기화", "past")
+        try expect(QuotaBarFormatters.resetClock(now.addingTimeInterval(38 * 60), now: now, calendar: calendar) == "오늘 13:20", "today")
+        try expect(QuotaBarFormatters.resetClock(now.addingTimeInterval(20 * 3_600), now: now, calendar: calendar) == "내일 08:42", "tomorrow")
+        try expect(QuotaBarFormatters.resetClock(now.addingTimeInterval(2 * 86_400 + 6 * 3_600), now: now, calendar: calendar) == "10월 9일 (금) 18:42", "later date")
+        try expect(QuotaBarFormatters.windowLabel(10_080) == "주간" && QuotaBarFormatters.windowLabel(300) == "5시간", "window labels")
     }
 
     private static func testTokenUsage() throws {

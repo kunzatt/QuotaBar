@@ -107,12 +107,10 @@ private struct QuotaBarMenuLabel: View {
         if snapshot.connectionState == .authRequired {
             return "\(profile.alias): 로그인이 필요합니다."
         }
-        let usage = snapshot.primaryCodexBucket?.windows
-            .sorted { lhs, rhs in
-                (lhs.windowDurationMinutes ?? .max) < (rhs.windowDurationMinutes ?? .max)
-            }
-            .map { "\(QuotaBarFormatters.windowText($0.windowDurationMinutes)) \($0.remainingPercent)% 남음" }
-            .joined(separator: " · ") ?? "사용량 없음"
+        let windows = snapshot.displayWindows
+            .map { "\(QuotaBarFormatters.windowLabel($0.windowDurationMinutes)) \($0.remainingPercent)% 남음" }
+            .joined(separator: " · ")
+        let usage = windows.isEmpty ? "사용량 없음" : windows
         return "\(profile.alias): \(usage), \(QuotaBarFormatters.fetchedText(snapshot.fetchedAt))"
     }
 

@@ -416,18 +416,54 @@ enum QuotaBarFormatters {
         return "\(minutes)분"
     }
 
+    /// Limit names as people say them: a seven-day window is "주간", not "1주".
+    static func windowLabel(_ minutes: Int?) -> String {
+        minutes == 7 * 24 * 60 ? "주간" : windowText(minutes)
+    }
+
+    /// The UI is Korean, so times are too, whatever the system language: "38분 후".
+    static func resetCountdown(_ date: Date?, now: Date = .now) -> String {
+        guard let date else { return "초기화 시각 미상" }
+        let minutes = Int((date.timeIntervalSince(now) / 60).rounded(.up))
+        if minutes <= 0 { return "곧 초기화" }
+        if minutes < 60 { return "\(minutes)분 후" }
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        if hours < 24 { return remainingMinutes == 0 ? "\(hours)시간 후" : "\(hours)시간 \(remainingMinutes)분 후" }
+        let days = hours / 24
+        let remainingHours = hours % 24
+        return remainingHours == 0 ? "\(days)일 후" : "\(days)일 \(remainingHours)시간 후"
+    }
+
+    /// "오늘 13:20", "내일 09:00", "10월 9일 (금) 19:00".
+    static func resetClock(_ date: Date?, now: Date = .now, calendar: Calendar = .current) -> String? {
+        guard let date else { return nil }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "HH:mm"
+        let time = formatter.string(from: date)
+        if calendar.isDate(date, inSameDayAs: now) { return "오늘 \(time)" }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: tomorrow) {
+            return "내일 \(time)"
+        }
+        formatter.dateFormat = "M월 d일 (E) HH:mm"
+        return formatter.string(from: date)
+    }
+
     static func resetText(_ date: Date?) -> String {
-        guard let date else { return "리셋 시각 미상" }
-        let relative = RelativeDateTimeFormatter()
-        relative.locale = .current
-        let exact = date.formatted(date: .abbreviated, time: .shortened)
-        return "\(relative.localizedString(for: date, relativeTo: .now)) · \(exact)"
+        guard let date else { return "초기화 시각 미상" }
+        let countdown = resetCountdown(date)
+        return resetClock(date).map { "\(countdown) · \($0)" } ?? countdown
     }
 
     static func fetchedText(_ date: Date?) -> String {
         guard let date else { return "아직 갱신하지 않음" }
+        if Date.now.timeIntervalSince(date) < 5 { return "방금" }
         let formatter = RelativeDateTimeFormatter()
-        formatter.locale = .current
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: .now)
     }
 }
