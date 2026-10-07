@@ -288,6 +288,24 @@ struct QuotaBarPreferences: Codable, Sendable {
     var primaryAccountID: UUID?
     var customCodexExecutablePath: URL?
     var launchAtLogin: Bool = false
+
+    /// Drag-and-drop placement: dropping on a later account lands after it, on an earlier
+    /// one before it, which is where the pointer is in both cases.
+    mutating func moveProfile(_ id: UUID, onto targetID: UUID) {
+        guard id != targetID,
+              let source = profiles.firstIndex(where: { $0.id == id }),
+              let target = profiles.firstIndex(where: { $0.id == targetID }) else { return }
+        let profile = profiles.remove(at: source)
+        profiles.insert(profile, at: target)
+    }
+
+    mutating func moveProfile(_ id: UUID, by offset: Int) {
+        guard let source = profiles.firstIndex(where: { $0.id == id }) else { return }
+        let target = min(max(source + offset, 0), profiles.count - 1)
+        guard target != source else { return }
+        let profile = profiles.remove(at: source)
+        profiles.insert(profile, at: target)
+    }
 }
 
 struct DeviceCodeLogin: Sendable, Equatable {

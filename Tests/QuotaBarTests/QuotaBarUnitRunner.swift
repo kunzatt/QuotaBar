@@ -21,6 +21,7 @@ struct QuotaBarUnitRunner {
             ("polling backoff", testPollingBackoff),
             ("repository persistence", testRepositoryPersistence),
             ("CodexBar data migration", testLegacyStorageMigration),
+            ("account reordering", testAccountReordering),
             ("profile provider decoding", testProfileProviderDecoding),
             ("managed Claude profile lifecycle", testManagedClaudeProfileLifecycle),
             ("Claude usage mapping", testClaudeUsageMapping),
@@ -279,6 +280,24 @@ struct QuotaBarUnitRunner {
         try await reloaded.bootstrap()
         let preferences = await reloaded.currentPreferences()
         try expect(preferences.primaryAccountID == second.id, "primary persistence")
+    }
+
+    private static func testAccountReordering() throws {
+        let accounts = (0..<4).map { AccountProfile(alias: "\($0)", codexHomePath: URL(fileURLWithPath: "/tmp/\($0)"), isManagedByApp: true) }
+        func order(_ preferences: QuotaBarPreferences) -> String { preferences.profiles.map(\.alias).joined() }
+        var preferences = QuotaBarPreferences(profiles: accounts, primaryAccountID: accounts[2].id)
+
+        preferences.moveProfile(accounts[0].id, onto: accounts[2].id)
+        try expect(order(preferences) == "1203", "dropping on a later account lands after it")
+        preferences.moveProfile(accounts[3].id, onto: accounts[1].id)
+        try expect(order(preferences) == "3120", "dropping on an earlier account lands before it")
+        preferences.moveProfile(accounts[3].id, by: -1)
+        try expect(order(preferences) == "3120", "first stays first")
+        preferences.moveProfile(accounts[1].id, by: 1)
+        try expect(order(preferences) == "3210", "move down one")
+        preferences.moveProfile(accounts[0].id, onto: accounts[0].id)
+        try expect(order(preferences) == "3210", "dropping on itself is a no-op")
+        try expect(preferences.primaryAccountID == accounts[2].id, "reordering keeps the starred account")
     }
 
     private static func testLegacyStorageMigration() async throws {

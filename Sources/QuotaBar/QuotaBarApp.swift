@@ -100,7 +100,7 @@ private struct QuotaBarMenuLabel: View {
     }
 
     private var tooltip: String {
-        guard let profile = store.primaryProfile else { return "대표 계정을 추가하세요." }
+        guard let profile = store.primaryProfile else { return "계정을 추가하세요." }
         guard let snapshot = store.primarySnapshot else {
             return "\(profile.alias): 아직 사용량 정보가 없습니다."
         }

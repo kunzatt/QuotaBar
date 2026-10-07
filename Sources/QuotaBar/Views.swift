@@ -5,7 +5,9 @@ struct UsagePopoverView: View {
     @ObservedObject var store: UsageStore
     let addAccount: () -> Void
     let reauthenticate: (AccountProfile) -> Void
-    @State private var showsDetails = false
+    @State private var expandedAccountIDs: Set<UUID> = []
+    @State private var didExpandStarredAccount = false
+    @State private var dropTargetID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -13,44 +15,37 @@ struct UsagePopoverView: View {
             Divider()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let primary = store.primaryProfile {
-                        PrimaryQuotaCard(
-                            profile: primary,
-                            snapshot: store.primarySnapshot,
-                            reauthenticate: { reauthenticate(primary) }
-                        )
-
-                        if let snapshot = store.primarySnapshot, snapshot.hasExtraDetails {
-                            QuotaDetailsSection(snapshot: snapshot, isExpanded: $showsDetails)
-                        }
-
-                        let otherProfiles = store.profiles.filter { $0.id != primary.id }
-                        if !otherProfiles.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                SectionTitle(title: "다른 계정", detail: "별을 눌러 대표 계정을 바꿉니다")
-                                VStack(spacing: 0) {
-                                    ForEach(Array(otherProfiles.enumerated()), id: \.element.id) { index, profile in
-                                        OtherAccountRow(
-                                            profile: profile,
-                                            snapshot: store.snapshots[profile.id],
-                                            makePrimary: { store.makePrimary(profile.id) },
-                                            reauthenticate: { reauthenticate(profile) }
-                                        )
-                                        if index < otherProfiles.count - 1 {
-                                            Divider().padding(.leading, 45)
-                                        }
-                                    }
-                                }
-                                .background(.quaternary.opacity(0.24), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 10) {
+                    if store.profiles.isEmpty {
+                        EmptyDashboard(addAccount: addAccount)
+                    } else {
+                        SectionTitle(title: "계정 \(store.profiles.count)개", detail: "★ 계정이 메뉴바에 표시 · 끌어서 순서 변경")
+                        // The order is the user's; starring an account never moves it.
+                        ForEach(store.profiles) { profile in
+                            AccountCard(
+                                profile: profile,
+                                snapshot: store.snapshots[profile.id],
+                                isStarred: profile.id == store.primaryProfile?.id,
+                                isExpanded: expansionBinding(for: profile.id),
+                                isDropTarget: dropTargetID == profile.id,
+                                star: { store.makePrimary(profile.id) },
+                                reauthenticate: { reauthenticate(profile) }
+                            )
+                            .draggable(profile.id.uuidString)
+                            .dropDestination(for: String.self) { items, _ in
+                                guard let id = items.first.flatMap(UUID.init(uuidString:)) else { return false }
+                                withAnimation(.snappy(duration: 0.2)) { store.moveProfile(id, onto: profile.id) }
+                                return true
+                            } isTargeted: { isTargeted in
+                                dropTargetID = isTargeted ? profile.id : (dropTargetID == profile.id ? nil : dropTargetID)
                             }
                         }
-                    } else {
-                        EmptyDashboard(addAccount: addAccount)
                     }
                 }
                 .padding(16)
             }
+            .onAppear(perform: expandStarredAccountOnce)
+            .onChange(of: store.isBootstrapped) { _, _ in expandStarredAccountOnce() }
 
             Divider()
             PopoverFooter(addAccount: addAccount)
@@ -65,6 +60,24 @@ struct UsagePopoverView: View {
         } message: {
             Text(store.transientMessage ?? "")
         }
+    }
+}
+
+extension UsagePopoverView {
+    private func expansionBinding(for id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { expandedAccountIDs.contains(id) },
+            set: { isExpanded in
+                if isExpanded { expandedAccountIDs.insert(id) } else { expandedAccountIDs.remove(id) }
+            }
+        )
+    }
+
+    /// Opens the starred account the first time accounts are known; afterwards the user decides.
+    private func expandStarredAccountOnce() {
+        guard !didExpandStarredAccount, let starred = store.primaryProfile else { return }
+        expandedAccountIDs.insert(starred.id)
+        didExpandStarredAccount = true
     }
 }
 
@@ -202,53 +215,112 @@ private struct EmptyDashboard: View {
     }
 }
 
-private struct PrimaryQuotaCard: View {
+/// One account in the popover. Collapsed it shows every limit compactly; expanded it adds
+/// reset times, extra limits, token usage and the connection state.
+private struct AccountCard: View {
     let profile: AccountProfile
     let snapshot: AccountUsageSnapshot?
+    let isStarred: Bool
+    @Binding var isExpanded: Bool
+    let isDropTarget: Bool
+    let star: () -> Void
     let reauthenticate: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 12) {
-                AccountAvatar(provider: profile.provider, snapshot: snapshot, size: 42)
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            if isExpanded {
+                details
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(12)
+        .background(background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(borderColor, lineWidth: isStarred || isDropTarget ? 1.5 : 1)
+        }
+        .opacity(profile.isEnabled ? 1 : 0.62)
+    }
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 7) {
-                        Text(profile.alias)
-                            .font(.headline)
-                            .lineLimit(1)
-                        PlanBadge(text: planBadgeText(profile: profile, snapshot: snapshot), tint: profile.provider.tint)
-                    }
-                    if let email = snapshot?.identity.email {
-                        Text(email)
-                            .font(.caption)
+    private var header: some View {
+        HStack(spacing: 11) {
+            AccountAvatar(provider: profile.provider, snapshot: snapshot, size: 36)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(profile.alias)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    Text(planBadgeText(profile: profile, snapshot: snapshot))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(profile.provider.tint)
+                        .lineLimit(1)
+                    if !profile.isEnabled {
+                        Text("꺼짐")
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
                     }
                 }
-
-                Spacer(minLength: 8)
-
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(snapshot?.remainingPercent.map { "\($0)%" } ?? "—")
-                        .font(.system(size: 30, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(usageColor(snapshot?.remainingPercent))
-                    if let window = snapshot?.limitingWindow {
-                        Text("\(QuotaBarFormatters.windowLabel(window.windowDurationMinutes)) 한도 기준")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                if let status = rowStatusText(profile: profile, snapshot: snapshot) {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(snapshot?.connectionState == .authRequired ? Color.orange : Color.secondary)
+                        .lineLimit(1)
+                } else if isExpanded, let email = snapshot?.identity.email {
+                    Text(email)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else {
+                    MiniLimits(snapshot: snapshot)
                 }
-                .accessibilityElement(children: .combine)
+            }
+            // Without this the spacer splits the free width with the name and truncates it.
+            .layoutPriority(1)
+
+            Spacer(minLength: 6)
+
+            VStack(alignment: .trailing, spacing: 0) {
+                Text(snapshot?.remainingPercent.map { "\($0)%" } ?? "—")
+                    .font(.title3.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(profile.isEnabled ? usageColor(snapshot?.remainingPercent) : Color.secondary)
+                if let window = snapshot?.limitingWindow {
+                    Text(QuotaBarFormatters.windowLabel(window.windowDurationMinutes))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
 
+            Button(action: star) {
+                Image(systemName: isStarred ? "star.fill" : "star")
+                    .foregroundStyle(isStarred ? Color.yellow : Color.secondary)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .disabled(!profile.isEnabled && !isStarred)
+            .help(isStarred ? "메뉴바에 표시 중인 계정" : "메뉴바에 이 계정 표시")
+            .accessibilityLabel(isStarred ? "\(profile.alias), 메뉴바에 표시 중" : "\(profile.alias)을 메뉴바에 표시")
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
+        }
+        .accessibilityAction(named: isExpanded ? "접기" : "펼치기") { isExpanded.toggle() }
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 11) {
             let rows = limitRows(snapshot)
-            if !rows.isEmpty {
-                VStack(spacing: 11) {
-                    ForEach(rows) { row in
-                        LimitBar(row: row, isLimiting: rows.count > 1 && row.window == snapshot?.limitingWindow)
-                    }
-                }
+            ForEach(rows) { row in
+                LimitBar(row: row, isLimiting: rows.count > 1 && row.window == snapshot?.limitingWindow)
+            }
+            ForEach(extraLimitRows) { row in
+                LimitBar(row: row, isLimiting: false)
+            }
+            if let snapshot, snapshot.hasTokenSummary {
+                TokenSummaryCard(summary: snapshot.tokenSummary)
             }
 
             HStack(spacing: 6) {
@@ -273,19 +345,33 @@ private struct PrimaryQuotaCard: View {
                 InlineNotice(text: error, symbol: "exclamationmark.triangle", tint: .orange)
             }
         }
-        .padding(16)
-        .background(
-            LinearGradient(
-                colors: [profile.provider.tint.opacity(0.13), profile.provider.tint.opacity(0.03)],
+    }
+
+    /// Model-scoped and other secondary buckets, e.g. "Fable 주간".
+    private var extraLimitRows: [LimitRow] {
+        (snapshot?.extraBuckets ?? []).flatMap { bucket in
+            bucket.windows.map { window in
+                let name = bucket.windows.count > 1
+                    ? "\(bucket.displayName) \(QuotaBarFormatters.windowLabel(window.windowDurationMinutes))"
+                    : bucket.displayName
+                return LimitRow(label: name, window: window)
+            }
+        }
+    }
+
+    private var background: some ShapeStyle {
+        isStarred
+            ? AnyShapeStyle(LinearGradient(
+                colors: [profile.provider.tint.opacity(0.12), profile.provider.tint.opacity(0.03)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(profile.provider.tint.opacity(0.16), lineWidth: 1)
-        }
+            ))
+            : AnyShapeStyle(Color.primary.opacity(0.035))
+    }
+
+    private var borderColor: Color {
+        if isDropTarget { return .accentColor }
+        return isStarred ? profile.provider.tint.opacity(0.35) : .primary.opacity(0.07)
     }
 }
 
@@ -319,7 +405,8 @@ private struct LimitBar: View {
                 Text(row.label)
                     .font(.caption.weight(isLimiting ? .bold : .medium))
                     .foregroundStyle(isLimiting ? Color.primary : Color.secondary)
-                    .frame(width: 40, alignment: .leading)
+                    .lineLimit(1)
+                    .frame(width: 66, alignment: .leading)
                 QuotaMeter(remaining: row.window?.remainingPercent)
                     .frame(height: 7)
                 Text(row.window.map { "\($0.remainingPercent)%" } ?? "—")
@@ -331,7 +418,7 @@ private struct LimitBar: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .padding(.leading, 49)
+                .padding(.leading, 75)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.window.map { "\(row.label) 한도 \($0.remainingPercent)퍼센트 남음, \(resetLine($0))" } ?? "\(row.label) 한도 정보 없음")
@@ -389,82 +476,6 @@ private struct QuotaMeter: View {
     }
 }
 
-private struct OtherAccountRow: View {
-    let profile: AccountProfile
-    let snapshot: AccountUsageSnapshot?
-    let makePrimary: () -> Void
-    let reauthenticate: () -> Void
-
-    var body: some View {
-        HStack(spacing: 11) {
-            AccountAvatar(provider: profile.provider, snapshot: snapshot, size: 34)
-
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    Text(profile.alias)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    Text(planBadgeText(profile: profile, snapshot: snapshot))
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(profile.provider.tint)
-                        .lineLimit(1)
-                    if !profile.isEnabled {
-                        Text("꺼짐")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if let status = rowStatusText(profile: profile, snapshot: snapshot) {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(snapshot?.connectionState == .authRequired ? Color.orange : Color.secondary)
-                        .lineLimit(1)
-                } else {
-                    MiniLimits(snapshot: snapshot)
-                }
-            }
-            // Without this the spacer splits the free width with the name and truncates it.
-            .layoutPriority(1)
-
-            Spacer(minLength: 6)
-
-            VStack(alignment: .trailing, spacing: 0) {
-                Text(snapshot?.remainingPercent.map { "\($0)%" } ?? "—")
-                    .font(.title3.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(profile.isEnabled ? usageColor(snapshot?.remainingPercent) : Color.secondary)
-                if let window = snapshot?.limitingWindow {
-                    Text(QuotaBarFormatters.windowLabel(window.windowDurationMinutes))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if snapshot?.connectionState == .authRequired {
-                Button(action: reauthenticate) {
-                    Image(systemName: "key")
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.borderless)
-                .help("\(profile.alias) 다시 로그인")
-                .accessibilityLabel("\(profile.alias) 다시 로그인")
-            } else {
-                Button(action: makePrimary) {
-                    Image(systemName: "star")
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.borderless)
-                .disabled(!profile.isEnabled)
-                .help("\(profile.alias)을 대표 계정으로 설정")
-                .accessibilityLabel("\(profile.alias)을 대표 계정으로 설정")
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .accessibilityElement(children: .contain)
-    }
-}
-
 private extension AccountUsageSnapshot {
     /// Buckets besides the main one, such as a model-scoped weekly limit.
     var extraBuckets: [RateLimitBucket] {
@@ -473,100 +484,6 @@ private extension AccountUsageSnapshot {
 
     var hasTokenSummary: Bool {
         tokenSummary.lifetimeTokens != nil || tokenSummary.latestDailyBucket?.tokens != nil || tokenSummary.peakDailyTokens != nil
-    }
-
-    var hasExtraDetails: Bool { !extraBuckets.isEmpty || hasTokenSummary }
-}
-
-private struct QuotaDetailsSection: View {
-    let snapshot: AccountUsageSnapshot
-    @Binding var isExpanded: Bool
-
-    var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            VStack(spacing: 10) {
-                ForEach(snapshot.extraBuckets) { bucket in
-                    QuotaBucketCard(bucket: bucket)
-                }
-                if snapshot.hasTokenSummary {
-                    TokenSummaryCard(summary: snapshot.tokenSummary)
-                }
-            }
-            .padding(.top, 10)
-        } label: {
-            HStack {
-                Label("추가 한도와 토큰", systemImage: "chart.xyaxis.line")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Text(snapshot.extraBuckets.isEmpty ? "토큰" : "\(snapshot.extraBuckets.count)개")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(14)
-        .background(.quaternary.opacity(0.20), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-private struct QuotaBucketCard: View {
-    let bucket: RateLimitBucket
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 7) {
-                Text(bucket.displayName)
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                if bucket.spendControlReached == true {
-                    Label("제한 도달", systemImage: "exclamationmark.octagon.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
-            if let primary = bucket.primary {
-                QuotaWindowRow(title: quotaWindowTitle(primary), window: primary)
-            }
-            if let secondary = bucket.secondary {
-                Divider()
-                QuotaWindowRow(title: quotaWindowTitle(secondary), window: secondary)
-            }
-        }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.primary.opacity(0.06), lineWidth: 1)
-        }
-    }
-}
-
-private struct QuotaWindowRow: View {
-    let title: String
-    let window: RateLimitWindow
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(window.remainingPercent)% 남음")
-                    .font(.caption.weight(.semibold).monospacedDigit())
-            }
-            ProgressView(value: Double(window.remainingPercent), total: 100)
-                .tint(usageColor(window.remainingPercent))
-            HStack {
-                Text(QuotaBarFormatters.windowText(window.windowDurationMinutes))
-                Spacer()
-                Text("초기화 \(QuotaBarFormatters.resetText(window.resetsAt))")
-                    .lineLimit(1)
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title) 제한, \(window.remainingPercent)퍼센트 남음, 초기화 \(QuotaBarFormatters.resetText(window.resetsAt))")
     }
 }
 
@@ -1254,7 +1171,7 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
     }
     var subtitle: String {
         switch self {
-        case .accounts: "연결된 계정과 대표 계정을 관리합니다."
+        case .accounts: "연결된 계정, 메뉴바에 표시할 계정(★), 순서를 관리합니다."
         case .general: "Codex 실행 파일과 시작 동작을 설정합니다."
         }
     }
@@ -1365,11 +1282,13 @@ private struct AccountsSettingsPage: View {
                 .padding(.vertical, 46)
             } else {
                 VStack(spacing: 12) {
-                    ForEach(store.profiles) { profile in
+                    ForEach(Array(store.profiles.enumerated()), id: \.element.id) { index, profile in
                         AccountSettingsRow(
                             profile: profile,
                             snapshot: store.snapshots[profile.id],
                             isPrimary: profile.id == store.primaryProfile?.id,
+                            moveUp: index > 0 ? { store.moveProfile(profile.id, by: -1) } : nil,
+                            moveDown: index < store.profiles.count - 1 ? { store.moveProfile(profile.id, by: 1) } : nil,
                             isEnabled: Binding(
                                 get: { store.profiles.first(where: { $0.id == profile.id })?.isEnabled ?? false },
                                 set: { store.setEnabled(profile.id, enabled: $0) }
@@ -1379,6 +1298,12 @@ private struct AccountsSettingsPage: View {
                             reauthenticate: { reauthenticate(profile) },
                             remove: { deletionCandidate = profile }
                         )
+                        .draggable(profile.id.uuidString)
+                        .dropDestination(for: String.self) { items, _ in
+                            guard let id = items.first.flatMap(UUID.init(uuidString:)) else { return false }
+                            withAnimation(.snappy(duration: 0.2)) { store.moveProfile(id, onto: profile.id) }
+                            return true
+                        }
                     }
                 }
             }
@@ -1391,6 +1316,8 @@ private struct AccountSettingsRow: View {
     let profile: AccountProfile
     let snapshot: AccountUsageSnapshot?
     let isPrimary: Bool
+    let moveUp: (() -> Void)?
+    let moveDown: (() -> Void)?
     @Binding var isEnabled: Bool
     let rename: (String) -> Void
     let makePrimary: () -> Void
@@ -1403,6 +1330,8 @@ private struct AccountSettingsRow: View {
         profile: AccountProfile,
         snapshot: AccountUsageSnapshot?,
         isPrimary: Bool,
+        moveUp: (() -> Void)?,
+        moveDown: (() -> Void)?,
         isEnabled: Binding<Bool>,
         rename: @escaping (String) -> Void,
         makePrimary: @escaping () -> Void,
@@ -1412,6 +1341,8 @@ private struct AccountSettingsRow: View {
         self.profile = profile
         self.snapshot = snapshot
         self.isPrimary = isPrimary
+        self.moveUp = moveUp
+        self.moveDown = moveDown
         _isEnabled = isEnabled
         self.rename = rename
         self.makePrimary = makePrimary
@@ -1433,7 +1364,10 @@ private struct AccountSettingsRow: View {
                             .focused($aliasIsFocused)
                             .onSubmit(commitAlias)
                         if isPrimary {
-                            SettingsPill(text: "대표", tint: .yellow)
+                            Image(systemName: "star.fill")
+                                .font(.caption)
+                                .foregroundStyle(.yellow)
+                                .help("메뉴바에 표시 중인 계정")
                         }
                         SettingsPill(text: planBadgeText(profile: profile, snapshot: snapshot), tint: profile.provider.tint)
                         SettingsPill(text: profile.isManagedByApp ? "앱 관리" : "외부", tint: .secondary)
@@ -1480,12 +1414,12 @@ private struct AccountSettingsRow: View {
 
             HStack(spacing: 9) {
                 if isPrimary {
-                    Label("대표 계정", systemImage: "star.fill")
+                    Label("메뉴바에 표시 중", systemImage: "star.fill")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                 } else {
                     Button(action: makePrimary) {
-                        Label("대표로 설정", systemImage: "star")
+                        Label("메뉴바에 표시", systemImage: "star")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -1503,6 +1437,15 @@ private struct AccountSettingsRow: View {
                 Spacer()
 
                 Menu {
+                    Button { moveUp?() } label: {
+                        Label("위로 이동", systemImage: "arrow.up")
+                    }
+                    .disabled(moveUp == nil)
+                    Button { moveDown?() } label: {
+                        Label("아래로 이동", systemImage: "arrow.down")
+                    }
+                    .disabled(moveDown == nil)
+                    Divider()
                     if snapshot?.connectionState != .authRequired {
                         Button(action: reauthenticate) {
                             Label("다시 로그인", systemImage: "person.badge.key")
@@ -1789,16 +1732,6 @@ private func windowResetSummary(_ snapshot: AccountUsageSnapshot?) -> String? {
     return windows
         .map { "\(QuotaBarFormatters.windowLabel($0.windowDurationMinutes)) \($0.remainingPercent)% · \(resetLine($0))" }
         .joined(separator: "\n")
-}
-
-private func remainingAccessibilityText(_ remaining: Int?, window: RateLimitWindow?) -> String {
-    if let remaining { return "\(quotaWindowTitle(window)) 잔여 \(remaining)퍼센트" }
-    return "쿼터 정보 없음"
-}
-
-private func quotaWindowTitle(_ window: RateLimitWindow?) -> String {
-    guard let minutes = window?.windowDurationMinutes, minutes > 0 else { return "사용량 한도" }
-    return "\(QuotaBarFormatters.windowText(minutes)) 한도"
 }
 
 private func usageColor(_ remaining: Int?) -> Color {
