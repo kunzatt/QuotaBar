@@ -349,9 +349,10 @@ private struct OtherAccountRow: View {
                     }
                 }
                 Text(accountSecondaryText(profile: profile, snapshot: snapshot))
-                    .font(.caption)
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(snapshot?.connectionState == .authRequired ? Color.orange : Color.secondary)
                     .lineLimit(1)
+                    .help(windowResetSummary(snapshot) ?? "")
             }
 
             Spacer(minLength: 6)
@@ -1431,7 +1432,8 @@ private struct AccountSettingsRow: View {
     private var statusDetail: String {
         let status = snapshot?.connectionState.displayName ?? "대기 중"
         let fetched = QuotaBarFormatters.fetchedText(snapshot?.fetchedAt)
-        return "\(status) · 마지막 갱신 \(fetched)"
+        let summary = windowSummary(snapshot).map { "\($0) · " } ?? ""
+        return "\(summary)\(status) · 마지막 갱신 \(fetched)"
     }
 
     private func commitAlias() {
@@ -1589,11 +1591,41 @@ private func shortResetText(_ date: Date?) -> String {
 private func accountSecondaryText(profile: AccountProfile, snapshot: AccountUsageSnapshot?) -> String {
     guard profile.isEnabled else { return "갱신 중지됨" }
     if snapshot?.connectionState == .authRequired { return "로그인 필요" }
+    if let windows = windowSummary(snapshot) {
+        // One window leaves room for its reset time; several keep their resets in the tooltip.
+        var text = windows
+        if snapshot?.primaryCodexBucket?.windows.count == 1, let reset = snapshot?.activeCodexWindow?.resetsAt {
+            text += " · 초기화 \(shortResetText(reset))"
+        }
+        return snapshot?.connectionState == .stale ? "오래된 정보 · \(text)" : text
+    }
     if snapshot?.connectionState == .stale { return "오래된 정보" }
     if let reset = snapshot?.activeCodexWindow?.resetsAt {
         return "초기화 \(shortResetText(reset))"
     }
     return snapshot?.connectionState.displayName ?? "사용량 없음"
+}
+
+/// Every window of the account's main bucket, shortest first, e.g. "5시간 84% · 주간 35%".
+/// Accounts other than the primary show only one number, so the row names each limit.
+private func windowSummary(_ snapshot: AccountUsageSnapshot?) -> String? {
+    guard let windows = snapshot?.primaryCodexBucket?.windows, !windows.isEmpty else { return nil }
+    return windows
+        .sorted { ($0.windowDurationMinutes ?? .max) < ($1.windowDurationMinutes ?? .max) }
+        .map { "\(windowLabel($0.windowDurationMinutes)) \($0.remainingPercent)%" }
+        .joined(separator: " · ")
+}
+
+private func windowResetSummary(_ snapshot: AccountUsageSnapshot?) -> String? {
+    guard let windows = snapshot?.primaryCodexBucket?.windows, !windows.isEmpty else { return nil }
+    return windows
+        .sorted { ($0.windowDurationMinutes ?? .max) < ($1.windowDurationMinutes ?? .max) }
+        .map { "\(windowLabel($0.windowDurationMinutes)) 초기화 \(QuotaBarFormatters.resetText($0.resetsAt))" }
+        .joined(separator: "\n")
+}
+
+private func windowLabel(_ minutes: Int?) -> String {
+    minutes == 7 * 24 * 60 ? "주간" : QuotaBarFormatters.windowText(minutes)
 }
 
 private func remainingAccessibilityText(_ remaining: Int?, window: RateLimitWindow?) -> String {
