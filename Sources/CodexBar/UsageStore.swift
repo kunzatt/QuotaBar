@@ -80,8 +80,8 @@ final class UsageStore: ObservableObject {
     @discardableResult
     func refresh(profileID: UUID, includeUsage: Bool) async -> Bool {
         guard let profile = profiles.first(where: { $0.id == profileID }), profile.isEnabled else { return false }
-        // A device-code login owns this profile until it completes or is cancelled. Polling
-        // during that period could otherwise overwrite “로그인 중” with an old auth error.
+        // A login owns this profile until it completes or is cancelled. Polling during
+        // that period could otherwise overwrite “로그인 중” with an old auth error.
         guard !authenticatingAccountIDs.contains(profileID) else { return true }
         guard !refreshingAccountIDs.contains(profileID) else { return true }
         refreshingAccountIDs.insert(profileID)
@@ -149,18 +149,18 @@ final class UsageStore: ObservableObject {
         Task { await clientPool.setConfiguredExecutableURL(url) }
     }
 
-    func addManagedAccount(alias: String) async throws -> (AccountProfile, DeviceCodeLogin) {
+    func addManagedAccount(alias: String, provider: AccountProvider) async throws -> (AccountProfile, AccountLogin) {
         let cleanAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanAlias.isEmpty else { throw CodexBarError.invalidLoginResponse }
         let root = await repository.rootDirectory()
-        let profile = try ProfileManager.createManagedProfile(alias: cleanAlias, repositoryRoot: root)
+        let profile = try ProfileManager.createManagedProfile(alias: cleanAlias, provider: provider, repositoryRoot: root)
         preferences.profiles.append(profile)
         if preferences.primaryAccountID == nil { preferences.primaryAccountID = profile.id }
         snapshots[profile.id] = AccountUsageSnapshot(accountID: profile.id, connectionState: .authenticating)
         persist()
         restartPolling()
         do {
-            let login = try await clientPool.beginDeviceCodeLogin(profile: profile)
+            let login = try await clientPool.beginLogin(profile: profile)
             return (profile, login)
         } catch {
             await clientPool.removeClient(for: profile.id)
@@ -178,18 +178,20 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    /// Starts a device-code login for an existing profile without removing its quota history
-    /// or replacing the profile. This also works for an external ~/.codex profile, but changes
-    /// only happen after the user completes the device-code flow in their browser.
-    func beginReauthentication(profile: AccountProfile) async throws -> DeviceCodeLogin {
+    /// Starts a login for an existing profile without removing its quota history or replacing
+    /// the profile. This also works for an external ~/.codex or ~/.claude profile, but changes
+    /// only happen after the user completes the flow in their browser.
+    func beginReauthentication(profile: AccountProfile) async throws -> AccountLogin {
         guard profiles.contains(where: { $0.id == profile.id }) else { throw CodexBarError.invalidLoginResponse }
+        // The menu-bar window and the Settings sheet can both ask; one login per account.
+        guard !authenticatingAccountIDs.contains(profile.id) else { throw CodexBarError.loginInProgress }
         authenticatingAccountIDs.insert(profile.id)
         updateSnapshot(profile.id) { snapshot in
             snapshot.connectionState = .authenticating
             snapshot.lastError = nil
         }
         do {
-            return try await clientPool.beginDeviceCodeLogin(profile: profile)
+            return try await clientPool.beginLogin(profile: profile)
         } catch {
             authenticatingAccountIDs.remove(profile.id)
             updateSnapshot(profile.id) { snapshot in
@@ -201,7 +203,7 @@ final class UsageStore: ObservableObject {
     }
 
     @discardableResult
-    func waitForDeviceLogin(profile: AccountProfile, loginID: String) async -> Bool {
+    func waitForLogin(profile: AccountProfile, loginID: String) async -> Bool {
         do {
             try await clientPool.waitForLogin(profile: profile, loginID: loginID)
             authenticatingAccountIDs.remove(profile.id)
@@ -224,6 +226,10 @@ final class UsageStore: ObservableObject {
         Task { await clientPool.cancelLogin(profile: profile, loginID: loginID) }
     }
 
+    func submitClaudeLoginCode(profile: AccountProfile, loginID: String, code: String) async {
+        await clientPool.submitClaudeLoginCode(profile: profile, loginID: loginID, code: code)
+    }
+
     func cancelReauthentication(profile: AccountProfile, loginID: String) async {
         await clientPool.cancelLogin(profile: profile, loginID: loginID)
         authenticatingAccountIDs.remove(profile.id)
@@ -235,6 +241,10 @@ final class UsageStore: ObservableObject {
 
     func cancelAndDiscardDeviceLogin(profile: AccountProfile, loginID: String) async {
         await clientPool.cancelLogin(profile: profile, loginID: loginID)
+        if profile.provider == .claude && profile.isManagedByApp {
+            // A browser login can finish just before the cancel; do not leave its Keychain item behind.
+            await clientPool.logout(profile: profile)
+        }
         if profile.isManagedByApp {
             let root = await repository.rootDirectory()
             try? ProfileManager.removeManagedProfile(profile, repositoryRoot: root)
@@ -249,16 +259,19 @@ final class UsageStore: ObservableObject {
         restartPolling()
     }
 
-    func addDefaultCodexProfile(alias: String) {
-        let cleanAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanAlias.isEmpty else { return }
-        let profile = ProfileManager.defaultCodexProfile(alias: cleanAlias)
-        guard !preferences.profiles.contains(where: {
-            $0.codexHomePath.standardizedFileURL == profile.codexHomePath.standardizedFileURL
-        }) else {
-            transientMessage = "기본 ~/.codex 프로필이 이미 등록되어 있습니다."
+    func hasDefaultProfile(for provider: AccountProvider) -> Bool {
+        let defaultPath = ProfileManager.defaultHome(for: provider).standardizedFileURL.path
+        return profiles.contains {
+            $0.provider == provider && !$0.isManagedByApp && $0.codexHomePath.standardizedFileURL.path == defaultPath
+        }
+    }
+
+    func addDefaultProfile(for provider: AccountProvider) {
+        guard !hasDefaultProfile(for: provider) else {
+            transientMessage = "기본 \(defaultHomeLabel(for: provider)) 프로필이 이미 등록되어 있습니다."
             return
         }
+        let profile = ProfileManager.defaultProfile(alias: "기본 \(provider.shortName)", provider: provider)
         preferences.profiles.append(profile)
         if preferences.primaryAccountID == nil { preferences.primaryAccountID = profile.id }
         snapshots[profile.id] = AccountUsageSnapshot(accountID: profile.id)
@@ -269,8 +282,10 @@ final class UsageStore: ObservableObject {
 
     func remove(_ profile: AccountProfile, deleteManagedFiles: Bool) async throws {
         if deleteManagedFiles && profile.isManagedByApp {
-            await clientPool.logout(profile: profile)
             let root = await repository.rootDirectory()
+            // Check the path before logging out so a damaged accounts.json cannot point logout elsewhere.
+            _ = try ProfileManager.managedAccountRoot(for: profile, repositoryRoot: root)
+            await clientPool.logout(profile: profile)
             try ProfileManager.removeManagedProfile(profile, repositoryRoot: root)
         }
         preferences.profiles.removeAll { $0.id == profile.id }
@@ -320,9 +335,16 @@ final class UsageStore: ObservableObject {
         snapshots[id] = snapshot
     }
 
+    func defaultHomeLabel(for provider: AccountProvider) -> String {
+        switch provider {
+        case .codex: "~/.codex"
+        case .claude: "~/.claude"
+        }
+    }
+
     private func friendly(_ error: Error) -> String {
         if let codexError = error as? CodexBarError { return codexError.errorDescription ?? "알 수 없는 오류" }
-        return "Codex 정보를 불러오지 못했습니다."
+        return "사용량 정보를 불러오지 못했습니다."
     }
 
     private func isAuthenticationError(_ error: Error) -> Bool {

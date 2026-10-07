@@ -2,7 +2,7 @@
 
 [한국어](README.md)
 
-CodexBar is a macOS menu-bar app for checking the remaining Codex quota across multiple ChatGPT accounts. It shows the primary account's remaining quota in the menu bar (for example, `41%`) and opens a usage panel focused on reset times and account health on click. Hovering shows a tooltip for the primary account. The app follows the system light or dark appearance.
+CodexBar is a macOS menu-bar app for checking the remaining quota across multiple ChatGPT Codex accounts and Claude Code (claude.ai Pro and Max) accounts. It shows the primary account's remaining quota in the menu bar (for example, `41%`) and opens a usage panel focused on reset times and account health on click. Hovering shows a tooltip for the primary account. The app follows the system light or dark appearance.
 
 Finder and the Desktop use a dedicated app icon: a blue Codex symbol with bold `Codex Bar` text below it.
 
@@ -47,8 +47,11 @@ Put the generated checksum in `Casks/codexbar-for-mac.rb`, then upload the ZIP t
 - Building from source: Apple Silicon or Intel Mac running macOS Sonoma (14) or later, with full Xcode (recommended) or Swift 6 command-line tools
 - The ChatGPT app or Codex CLI. The default discovery path is `/Applications/ChatGPT.app/Contents/Resources/codex`.
 - A Codex account on a ChatGPT Plus, Pro, or Pro Lite plan
+- For Claude Code accounts: the Claude Code CLI (`claude`) and a claude.ai Pro or Max subscription. CodexBar looks in `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, then PATH.
 
-CodexBar does not use OpenAI Platform API keys, web scraping, or unofficial REST endpoints. It only calls local `codex app-server --stdio` processes.
+For Codex accounts, CodexBar uses no OpenAI Platform API keys, web scraping, or unofficial REST endpoints. It only calls local `codex app-server --stdio` processes.
+
+Claude Code has no local protocol for asking about usage. For Claude Code accounts, CodexBar therefore calls `https://api.anthropic.com/api/oauth/usage`, the endpoint behind Claude Code's `/usage` screen. It is undocumented and may change without notice.
 
 ## Build and run
 
@@ -91,7 +94,7 @@ cd CodexBar
 ./scripts/test.sh
 ```
 
-The tests cover JSONL response and notification decoding, multiple quota buckets, primary and secondary windows, null payloads, `Int64` token totals, malformed JSONL recovery, duration formatting, backoff, metadata persistence, and log redaction. They do not read authentication files or perform an account login.
+The tests cover JSONL response and notification decoding, multiple quota buckets, primary and secondary windows, null payloads, `Int64` token totals, malformed JSONL recovery, duration formatting, backoff, metadata persistence, log redaction, Claude usage mapping, Claude Keychain item naming, and Claude profile creation and removal. They do not read authentication files or perform an account login.
 
 ## Add the first account
 
@@ -103,6 +106,14 @@ The tests cover JSONL response and notification decoding, multiple quota buckets
 Repeat this process for each additional account. Each account has a separate `CODEX_HOME` and `codex app-server` process, so authentication never mixes between profiles.
 
 To use the default Codex login in `~/.codex`, choose **Register default ~/.codex** in Settings. That profile is marked as external; CodexBar does not delete that directory or its authentication files.
+
+### Claude Code accounts
+
+1. In **Connect account**, switch the service to **Claude Code**, enter an alias, and continue.
+2. Claude Code opens the browser. Sign in to the claude.ai account you want, and the login completes on its own. If the browser shows a code instead, paste it into the CodexBar window and submit it.
+3. Each account uses its own `CLAUDE_CONFIG_DIR`, so logins never mix. To use the default login you already use in the terminal (`~/.claude`), choose **Use default ~/.claude** in Settings.
+
+Claude usage shows the five-hour and weekly limits. The menu bar shows what is left of the five-hour limit, and any per-model weekly limits appear as separate rows in the popover. Background refreshes run on the same schedule as Codex, but each account calls the unofficial API at most about once a minute. When the API answers 429, CodexBar waits for the longer of `Retry-After` and a backoff that grows from 5 minutes to 1 hour.
 
 When an account requires a login, choose **Sign in again** from the usage popover or Settings to start Device Code Login. The existing profile and quota history stay in place; only the credentials for the account completed in the browser are refreshed.
 
@@ -121,18 +132,23 @@ Account metadata created by the app is stored here:
 ```text
 ~/Library/Application Support/CodexBar/
 ├── accounts.json
-└── Accounts/<account-uuid>/codex-home/
+├── Accounts/<account-uuid>/codex-home/
+└── Accounts/<account-uuid>/claude-home/
 ```
 
 The application-support directory and each account directory are kept at `0700`; metadata and generated `auth.json` are kept at `0600` where possible. `accounts.json` stores only the alias, UUID, local path, and enabled/primary-account settings.
 
-CodexBar never reads or parses the contents of `auth.json`. It does not store tokens, cookies, API keys, prompts, or conversations. stderr is drained only to prevent a blocked process and is not persisted; visible error messages are kept generic so credentials are not exposed.
+CodexBar never reads or parses the contents of `auth.json`.
+
+Claude Code accounts are the exception. To call the usage API, CodexBar uses `/usr/bin/security` to read the OAuth access token that Claude Code stores in the macOS Keychain. The token stays in memory and is sent only to `api.anthropic.com`. When the token is within two minutes of expiry or the API rejects it, CodexBar runs `claude auth login` with `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` in an empty scratch profile, so Claude Code redeems the refresh token. Only a complete new token is written back to the original Keychain item, using the same `security -i` path Claude Code uses. A failed renewal leaves the original login untouched, and the scratch profile and its Keychain item are deleted right away. Sign-in and sign-out also go through `claude auth login` and `claude auth logout`. It does not store tokens, cookies, API keys, prompts, or conversations. stderr is drained only to prevent a blocked process and is not persisted; visible error messages are kept generic so credentials are not exposed.
 
 ## Known limitations
 
 - `codex app-server` is experimental in the Codex CLI. A CLI update may change response schemas, so raw JSON is isolated at the `ProtocolMapper` boundary.
 - The Plus five-hour limit is shown when the Codex response includes a 300-minute bucket. If the server returns only the weekly bucket, CodexBar does not estimate the missing value and shows the weekly limit with an explanation.
 - Version 1 covers ChatGPT Codex usage only. API costs, other plan-specific optimisations, automatic account switching, and automatic reset-credit spending are out of scope.
+- The Claude usage API is unofficial. If Anthropic changes its format or authentication, Claude account refreshes may stop. Codex accounts are unaffected.
+- Per-account Claude Keychain items follow Claude Code's current naming rule (`Claude Code-credentials-<first 8 hex digits of SHA-256 of CLAUDE_CONFIG_DIR>`). If Claude Code changes that rule, the affected account shows as needing sign-in.
 - Device-code login and menu-bar interaction need a GUI session and a signed-in account to test.
 
 ## Troubleshooting

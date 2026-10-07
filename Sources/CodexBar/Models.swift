@@ -1,12 +1,36 @@
 import Foundation
 
+enum AccountProvider: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
+    case codex
+    case claude
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .codex: "Codex"
+        case .claude: "Claude Code"
+        }
+    }
+
+    var shortName: String {
+        switch self {
+        case .codex: "Codex"
+        case .claude: "Claude"
+        }
+    }
+}
+
 struct AccountProfile: Codable, Identifiable, Hashable, Sendable {
     let id: UUID
     var alias: String
+    /// The provider's configuration home: CODEX_HOME for Codex, CLAUDE_CONFIG_DIR for
+    /// Claude Code. The key predates Claude support and is kept for saved profiles.
     var codexHomePath: URL
     let isManagedByApp: Bool
     var isEnabled: Bool
     let createdAt: Date
+    let provider: AccountProvider
 
     init(
         id: UUID = UUID(),
@@ -14,7 +38,8 @@ struct AccountProfile: Codable, Identifiable, Hashable, Sendable {
         codexHomePath: URL,
         isManagedByApp: Bool,
         isEnabled: Bool = true,
-        createdAt: Date = .now
+        createdAt: Date = .now,
+        provider: AccountProvider = .codex
     ) {
         self.id = id
         self.alias = alias
@@ -22,6 +47,23 @@ struct AccountProfile: Codable, Identifiable, Hashable, Sendable {
         self.isManagedByApp = isManagedByApp
         self.isEnabled = isEnabled
         self.createdAt = createdAt
+        self.provider = provider
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, alias, codexHomePath, isManagedByApp, isEnabled, createdAt, provider
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        alias = try container.decode(String.self, forKey: .alias)
+        codexHomePath = try container.decode(URL.self, forKey: .codexHomePath)
+        isManagedByApp = try container.decode(Bool.self, forKey: .isManagedByApp)
+        isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        // Profiles saved before Claude Code support have no provider and are Codex profiles.
+        provider = try container.decodeIfPresent(AccountProvider.self, forKey: .provider) ?? .codex
     }
 }
 
@@ -32,9 +74,9 @@ struct AccountIdentity: Codable, Hashable, Sendable {
 
     static let unknown = AccountIdentity(loginType: "unknown", email: nil, planType: nil)
 
-    /// The app-server reports the account's ChatGPT plan. Keep the original value for
-    /// future plans while normalizing the names currently shown by Codex.
-    var codexPlanName: String? {
+    /// Codex reports the ChatGPT plan and Claude Code the claude.ai subscription. Keep the
+    /// original value for future plans while normalizing the names currently in use.
+    var planName: String? {
         guard let rawPlanType = planType?.trimmingCharacters(in: .whitespacesAndNewlines),
               !rawPlanType.isEmpty else {
             return nil
@@ -45,6 +87,11 @@ struct AccountIdentity: Codable, Hashable, Sendable {
         case "prolite", "pro-lite", "pro_lite": return "Pro Lite"
         case "go": return "Go"
         case "free": return "Free"
+        case "max": return "Max"
+        case "max_5x": return "Max 5x"
+        case "max_20x": return "Max 20x"
+        case "team": return "Team"
+        case "enterprise": return "Enterprise"
         default: return rawPlanType
         }
     }
@@ -230,6 +277,25 @@ struct DeviceCodeLogin: Sendable, Equatable {
     let verificationURL: URL
 }
 
+/// Claude Code signs in through its own browser OAuth flow and opens the browser itself.
+/// `authorizationURL` is the CLI's manual fallback, which shows a code to paste back.
+struct ClaudeBrowserLogin: Sendable, Equatable {
+    let loginID: String
+    let authorizationURL: URL?
+}
+
+enum AccountLogin: Sendable, Equatable {
+    case deviceCode(DeviceCodeLogin)
+    case claudeBrowser(ClaudeBrowserLogin)
+
+    var loginID: String {
+        switch self {
+        case .deviceCode(let login): login.loginID
+        case .claudeBrowser(let login): login.loginID
+        }
+    }
+}
+
 struct ProviderRefreshResult: Sendable {
     let identity: AccountIdentity?
     let buckets: [RateLimitBucket]
@@ -239,6 +305,9 @@ struct ProviderRefreshResult: Sendable {
 enum CodexBarError: LocalizedError, Sendable, Equatable {
     case executableNotFound
     case executableNotUsable(URL)
+    case claudeExecutableNotFound
+    case claudeTokenRenewalFailed
+    case claudeUsageRateLimited
     case unsupportedProtocol
     case timeout(method: String)
     case processExited
@@ -247,19 +316,24 @@ enum CodexBarError: LocalizedError, Sendable, Equatable {
     case server(String)
     case invalidLoginResponse
     case invalidProfilePath
+    case loginInProgress
 
     var errorDescription: String? {
         switch self {
         case .executableNotFound: "Codex 실행 파일을 찾을 수 없습니다. 설정에서 경로를 지정하세요."
         case .executableNotUsable: "선택한 Codex 실행 파일을 실행할 수 없습니다."
+        case .claudeExecutableNotFound: "Claude Code 실행 파일을 찾을 수 없습니다. Claude Code가 설치되어 있는지 확인하세요."
+        case .claudeTokenRenewalFailed: "Claude 토큰을 갱신하지 못했습니다. 잠시 후 자동으로 다시 시도하며, 계속되면 다시 로그인하세요."
+        case .claudeUsageRateLimited: "Claude 사용량 조회가 일시적으로 제한되었습니다. 잠시 후 자동으로 다시 시도합니다."
         case .unsupportedProtocol: "설치된 Codex app-server 프로토콜을 지원하지 않습니다."
         case .timeout: "Codex 응답 시간이 초과되었습니다."
         case .processExited: "Codex app-server가 예기치 않게 종료되었습니다."
-        case .malformedResponse: "Codex에서 해석할 수 없는 응답을 받았습니다."
+        case .malformedResponse: "해석할 수 없는 응답을 받았습니다."
         case .authenticationRequired: "이 계정은 다시 로그인해야 합니다."
-        case .server: "Codex 정보를 갱신하지 못했습니다. 잠시 후 자동으로 다시 시도합니다."
-        case .invalidLoginResponse: "Codex 로그인 응답이 예상과 다릅니다."
+        case .server: "사용량 정보를 갱신하지 못했습니다. 잠시 후 자동으로 다시 시도합니다."
+        case .invalidLoginResponse: "로그인 응답이 예상과 다릅니다."
         case .invalidProfilePath: "보안을 위해 이 프로필 경로는 삭제할 수 없습니다."
+        case .loginInProgress: "이 계정의 로그인이 이미 다른 창에서 진행 중입니다."
         }
     }
 }

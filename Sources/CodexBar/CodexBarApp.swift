@@ -32,6 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationInProgress = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Writing to a child's stdin just after it exits must fail with EPIPE, not kill the app.
+        signal(SIGPIPE, SIG_IGN)
         NSApp.setActivationPolicy(.accessory)
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,

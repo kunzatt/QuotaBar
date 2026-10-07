@@ -42,27 +42,52 @@ actor AccountRepository {
 }
 
 enum ProfileManager {
-    static func createManagedProfile(alias: String, repositoryRoot: URL) throws -> AccountProfile {
+    static func managedHomeDirectoryName(for provider: AccountProvider) -> String {
+        switch provider {
+        case .codex: "codex-home"
+        case .claude: "claude-home"
+        }
+    }
+
+    static func createManagedProfile(
+        alias: String,
+        provider: AccountProvider = .codex,
+        repositoryRoot: URL
+    ) throws -> AccountProfile {
         let id = UUID()
         let accountRoot = repositoryRoot
             .appendingPathComponent("Accounts", isDirectory: true)
             .appendingPathComponent(id.uuidString, isDirectory: true)
-        let codexHome = accountRoot.appendingPathComponent("codex-home", isDirectory: true)
+        let home = accountRoot.appendingPathComponent(managedHomeDirectoryName(for: provider), isDirectory: true)
         let manager = FileManager.default
-        try manager.createDirectory(at: codexHome, withIntermediateDirectories: true)
-        for url in [repositoryRoot.appendingPathComponent("Accounts", isDirectory: true), accountRoot, codexHome] {
+        try manager.createDirectory(at: home, withIntermediateDirectories: true)
+        for url in [repositoryRoot.appendingPathComponent("Accounts", isDirectory: true), accountRoot, home] {
             try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
         }
-        let configURL = codexHome.appendingPathComponent("config.toml")
-        let config = "cli_auth_credentials_store = \"file\"\n"
-        try config.data(using: .utf8)?.write(to: configURL, options: .atomic)
-        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
-        return AccountProfile(id: id, alias: alias.trimmingCharacters(in: .whitespacesAndNewlines), codexHomePath: codexHome, isManagedByApp: true)
+        if provider == .codex {
+            let configURL = home.appendingPathComponent("config.toml")
+            let config = "cli_auth_credentials_store = \"file\"\n"
+            try config.data(using: .utf8)?.write(to: configURL, options: .atomic)
+            try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+        }
+        return AccountProfile(
+            id: id,
+            alias: alias.trimmingCharacters(in: .whitespacesAndNewlines),
+            codexHomePath: home,
+            isManagedByApp: true,
+            provider: provider
+        )
     }
 
-    static func defaultCodexProfile(alias: String) -> AccountProfile {
-        let home = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
-        return AccountProfile(alias: alias, codexHomePath: home, isManagedByApp: false)
+    static func defaultHome(for provider: AccountProvider) -> URL {
+        switch provider {
+        case .codex: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
+        case .claude: ClaudeProfilePaths.defaultConfigDirectory
+        }
+    }
+
+    static func defaultProfile(alias: String, provider: AccountProvider) -> AccountProfile {
+        AccountProfile(alias: alias, codexHomePath: defaultHome(for: provider), isManagedByApp: false, provider: provider)
     }
 
     static func secureAuthenticationFile(at codexHome: URL) {
@@ -73,16 +98,23 @@ enum ProfileManager {
 
     static func removeManagedProfile(_ profile: AccountProfile, repositoryRoot: URL) throws {
         guard profile.isManagedByApp else { return }
+        try FileManager.default.removeItem(at: managedAccountRoot(for: profile, repositoryRoot: repositoryRoot))
+    }
+
+    /// The UUID folder that may be deleted for a managed profile, after checking that the
+    /// saved home path points exactly at that profile's provider home inside it.
+    static func managedAccountRoot(for profile: AccountProfile, repositoryRoot: URL) throws -> URL {
         let expected = repositoryRoot
             .appendingPathComponent("Accounts", isDirectory: true)
             .appendingPathComponent(profile.id.uuidString, isDirectory: true)
         let resolvedExpected = expected.standardizedFileURL.path
         let resolvedHome = profile.codexHomePath.standardizedFileURL.path
-        guard resolvedHome == expected.appendingPathComponent("codex-home", isDirectory: true).standardizedFileURL.path,
+        let expectedHome = expected.appendingPathComponent(managedHomeDirectoryName(for: profile.provider), isDirectory: true)
+        guard resolvedHome == expectedHome.standardizedFileURL.path,
               resolvedExpected.hasPrefix(repositoryRoot.standardizedFileURL.path + "/") else {
             throw CodexBarError.invalidProfilePath
         }
-        try FileManager.default.removeItem(at: expected)
+        return expected
     }
 
 }
@@ -133,6 +165,7 @@ protocol CodexUsageProvider: Sendable {
 
 actor CodexClientPool {
     private var clients: [UUID: CodexAppServerClient] = [:]
+    private var claudeClients: [UUID: ClaudeUsageClient] = [:]
     private var configuredExecutableURL: URL?
     private var accountUpdateHandler: (@Sendable (UUID) async -> Void)?
 
@@ -149,37 +182,74 @@ actor CodexClientPool {
     }
 
     func refresh(profile: AccountProfile, includeUsage: Bool) async throws -> ProviderRefreshResult {
-        try await client(for: profile).refresh(includeUsage: includeUsage)
+        switch profile.provider {
+        case .codex: try await client(for: profile).refresh(includeUsage: includeUsage)
+        case .claude: try await claudeClient(for: profile).refresh(includeUsage: includeUsage)
+        }
     }
 
-    func beginDeviceCodeLogin(profile: AccountProfile) async throws -> DeviceCodeLogin {
-        try await client(for: profile).beginDeviceCodeLogin()
+    func beginLogin(profile: AccountProfile) async throws -> AccountLogin {
+        switch profile.provider {
+        case .codex: .deviceCode(try await client(for: profile).beginDeviceCodeLogin())
+        case .claude: .claudeBrowser(try await claudeClient(for: profile).beginBrowserLogin())
+        }
     }
 
     func waitForLogin(profile: AccountProfile, loginID: String) async throws {
-        try await client(for: profile).waitForLogin(loginID: loginID)
-        ProfileManager.secureAuthenticationFile(at: profile.codexHomePath)
+        switch profile.provider {
+        case .codex:
+            try await client(for: profile).waitForLogin(loginID: loginID)
+            ProfileManager.secureAuthenticationFile(at: profile.codexHomePath)
+        case .claude:
+            try await claudeClient(for: profile).waitForLogin(loginID: loginID)
+        }
+    }
+
+    func submitClaudeLoginCode(profile: AccountProfile, loginID: String, code: String) async {
+        guard profile.provider == .claude else { return }
+        await claudeClient(for: profile).submitLoginCode(code, loginID: loginID)
     }
 
     func cancelLogin(profile: AccountProfile, loginID: String) async {
-        guard let activeClient = try? await client(for: profile) else { return }
-        await activeClient.cancelLogin(loginID: loginID)
+        switch profile.provider {
+        case .codex:
+            guard let activeClient = try? await client(for: profile) else { return }
+            await activeClient.cancelLogin(loginID: loginID)
+        case .claude:
+            await claudeClient(for: profile).cancelLogin(loginID: loginID)
+        }
     }
 
     func logout(profile: AccountProfile) async {
-        guard let activeClient = try? await client(for: profile) else { return }
-        await activeClient.logout()
+        switch profile.provider {
+        case .codex:
+            guard let activeClient = try? await client(for: profile) else { return }
+            await activeClient.logout()
+        case .claude:
+            await claudeClient(for: profile).logout()
+        }
     }
 
     func shutdownAll() async {
         let activeClients = Array(clients.values)
+        let activeClaudeClients = Array(claudeClients.values)
         clients.removeAll()
+        claudeClients.removeAll()
         for client in activeClients { await client.shutdown() }
+        for client in activeClaudeClients { await client.shutdown() }
     }
 
     func removeClient(for accountID: UUID) async {
-        guard let client = clients.removeValue(forKey: accountID) else { return }
-        await client.shutdown()
+        if let client = clients.removeValue(forKey: accountID) { await client.shutdown() }
+        if let client = claudeClients.removeValue(forKey: accountID) { await client.shutdown() }
+    }
+
+    /// The Claude CLI is located lazily: reading usage needs only the Keychain and the network.
+    private func claudeClient(for profile: AccountProfile) -> ClaudeUsageClient {
+        if let existing = claudeClients[profile.id] { return existing }
+        let newClient = ClaudeUsageClient(profile: profile)
+        claudeClients[profile.id] = newClient
+        return newClient
     }
 
     private func client(for profile: AccountProfile) async throws -> CodexAppServerClient {
