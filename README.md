@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-CodexBar는 여러 ChatGPT Plus, Pro, Pro Lite Codex 계정의 남은 쿼터를 macOS 메뉴바에서 확인하는 앱입니다. 대표 계정의 `41%` 같은 잔여량을 메뉴바에 표시하고, 클릭하면 초기화 시각과 계정 상태를 우선한 사용량 패널을 엽니다. 포인터를 올리면 대표 계정 요약을 툴팁으로 보여주며 시스템 라이트·다크 모드를 자동으로 따릅니다.
+CodexBar는 여러 ChatGPT Plus, Pro, Pro Lite Codex 계정과 Claude Code(claude.ai Pro·Max) 계정의 남은 쿼터를 macOS 메뉴바에서 확인하는 앱입니다. 대표 계정의 `41%` 같은 잔여량을 메뉴바에 표시하고, 클릭하면 초기화 시각과 계정 상태를 우선한 사용량 패널을 엽니다. 포인터를 올리면 대표 계정 요약을 툴팁으로 보여주며 시스템 라이트·다크 모드를 자동으로 따릅니다.
 
 Finder와 Desktop에는 파란 Codex 심볼 아래 굵은 `Codex Bar` 텍스트가 있는 전용 앱 아이콘을 사용합니다.
 
@@ -45,8 +45,11 @@ brew uninstall --zap --cask codexbar-for-mac
 - 소스 빌드: macOS 14 Sonoma 이상 Apple Silicon 또는 Intel Mac, 전체 Xcode(권장) 또는 Swift 6 명령행 도구
 - ChatGPT 앱 또는 Codex CLI. 기본 탐색 경로는 `/Applications/ChatGPT.app/Contents/Resources/codex`입니다.
 - ChatGPT Plus, Pro 또는 Pro Lite로 로그인할 수 있는 Codex 계정
+- Claude Code 계정을 쓰려면 Claude Code CLI(`claude`)와 claude.ai Pro 또는 Max 구독. `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, PATH 순으로 찾습니다.
 
-CodexBar는 OpenAI Platform API 키, 웹 스크래핑, 비공식 REST 엔드포인트를 사용하지 않습니다. 로컬 `codex app-server --stdio`만 호출합니다.
+Codex 계정은 OpenAI Platform API 키, 웹 스크래핑, 비공식 REST 엔드포인트 없이 로컬 `codex app-server --stdio`만 호출합니다.
+
+Claude Code에는 사용량을 묻는 로컬 프로토콜이 없습니다. 그래서 Claude Code 계정은 Claude Code의 `/usage` 화면이 쓰는 `https://api.anthropic.com/api/oauth/usage`를 직접 호출합니다. 이 엔드포인트는 공개 문서가 없는 비공식 API이므로 예고 없이 바뀔 수 있습니다.
 
 ## 빌드와 실행
 
@@ -89,7 +92,7 @@ cd CodexBar
 ./scripts/test.sh
 ```
 
-현재 테스트는 JSONL 응답/알림 디코딩, multi-bucket 제한, primary/secondary window, null payload, `Int64` 토큰, malformed JSONL 복구, 기간 포맷, backoff, 메타데이터 저장, 로그 마스킹을 검증합니다. 실제 계정 로그인이나 인증 파일을 읽지 않습니다.
+현재 테스트는 JSONL 응답/알림 디코딩, multi-bucket 제한, primary/secondary window, null payload, `Int64` 토큰, malformed JSONL 복구, 기간 포맷, backoff, 메타데이터 저장, 로그 마스킹, Claude 사용량 매핑, Claude Keychain 항목 이름, Claude 프로필 생성·삭제를 검증합니다. 실제 계정 로그인이나 인증 파일을 읽지 않습니다.
 
 ## 첫 계정 추가
 
@@ -101,6 +104,14 @@ cd CodexBar
 추가 계정도 같은 순서를 반복합니다. 계정마다 독립된 `CODEX_HOME`과 `codex app-server` 프로세스를 사용하므로 인증이 섞이지 않습니다.
 
 기존 기본 Codex 로그인(`~/.codex`)을 쓰려면 설정의 **기본 ~/.codex 등록**을 선택할 수 있습니다. 이 프로필은 외부 프로필로 표시되며, CodexBar가 디렉터리나 인증 파일을 삭제하지 않습니다.
+
+### Claude Code 계정
+
+1. **계정 연결**에서 서비스를 **Claude Code**로 바꾸고 별칭을 입력한 뒤 **로그인 계속**을 누릅니다.
+2. Claude Code가 브라우저를 엽니다. 원하는 claude.ai 계정으로 로그인하면 자동으로 완료됩니다. 브라우저에 코드가 표시되면 CodexBar 창에 붙여넣고 **제출**을 누릅니다.
+3. 계정마다 독립된 `CLAUDE_CONFIG_DIR`을 쓰므로 로그인이 섞이지 않습니다. 이미 터미널에서 쓰는 기본 로그인(`~/.claude`)은 설정의 **기본 ~/.claude 사용**으로 연결합니다.
+
+Claude 사용량은 5시간 한도와 주간 한도로 표시하며, 메뉴바에는 5시간 한도의 잔여량을 보여줍니다. 모델별 주간 한도가 있으면 팝오버에 별도 항목으로 나옵니다. 백그라운드 갱신은 Codex와 같은 주기로 돌지만, 비공식 API 호출은 계정마다 약 1분에 한 번으로 제한합니다. API가 호출 제한(429)을 알리면 `Retry-After`와 5분부터 최대 1시간까지 늘어나는 대기 중 긴 쪽을 지킵니다.
 
 로그인 필요 상태가 되면 사용량 팝오버 또는 설정의 **다시 로그인**을 눌러 Device Code 로그인을 시작할 수 있습니다. 기존 계정 항목과 사용량 기록은 유지되며, 브라우저에서 완료한 계정의 인증 정보만 갱신됩니다.
 
@@ -118,18 +129,23 @@ cd CodexBar
 ```text
 ~/Library/Application Support/CodexBar/
 ├── accounts.json
-└── Accounts/<account-uuid>/codex-home/
+├── Accounts/<account-uuid>/codex-home/
+└── Accounts/<account-uuid>/claude-home/
 ```
 
 애플리케이션 지원 디렉터리와 계정별 디렉터리는 `0700`, 메타데이터와 생성된 `auth.json`은 가능한 경우 `0600` 권한으로 유지합니다. `accounts.json`에는 별칭, UUID, 로컬 경로, 활성화/대표 계정 설정만 저장합니다.
 
-CodexBar는 `auth.json`의 내용을 직접 읽거나 파싱하지 않습니다. 토큰·쿠키·API 키·프롬프트·대화 내용도 저장하거나 로그로 남기지 않습니다. stderr는 드레인만 하며 영구 저장하지 않고, 오류 표시도 자격 증명 문자열을 노출하지 않는 일반 메시지로 제한합니다.
+CodexBar는 `auth.json`의 내용을 직접 읽거나 파싱하지 않습니다.
+
+Claude Code 계정은 예외입니다. 사용량 API를 호출하려고 Claude Code가 macOS Keychain에 저장한 OAuth 액세스 토큰을 `/usr/bin/security`로 읽습니다. 토큰은 메모리에만 두고 `api.anthropic.com`으로만 보냅니다. 토큰이 만료 2분 전이거나 API가 거부하면, 빈 임시 프로필에서 `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`과 함께 `claude auth login`을 실행해 Claude Code가 새 토큰을 받게 합니다. 새 토큰이 완전한지 확인한 뒤에만 원래 Keychain 항목에 Claude Code와 같은 방식(`security -i`)으로 다시 씁니다. 갱신이 실패해도 원래 로그인은 건드리지 않으며, 임시 프로필과 그 Keychain 항목은 바로 지웁니다. 로그인과 로그아웃도 `claude auth login`/`claude auth logout`이 처리합니다. 토큰·쿠키·API 키·프롬프트·대화 내용도 저장하거나 로그로 남기지 않습니다. stderr는 드레인만 하며 영구 저장하지 않고, 오류 표시도 자격 증명 문자열을 노출하지 않는 일반 메시지로 제한합니다.
 
 ## 알려진 제한
 
 - `codex app-server`는 Codex CLI의 experimental 기능입니다. Codex 업데이트로 응답 스키마가 바뀔 수 있으므로 원시 JSON은 `ProtocolMapper` 경계에서만 처리합니다.
 - Plus의 5시간 한도는 Codex 서버 응답에 300분 버킷이 있을 때 표시합니다. 서버가 주간 버킷만 보내면 앱은 값을 추정하지 않고 주간 한도만 표시합니다.
 - v1은 ChatGPT Plus, Pro, Pro Lite Codex 사용량을 다룹니다. API 비용, 자동 계정 전환, reset credit 자동 소비는 지원하지 않습니다.
+- Claude 사용량 API는 비공식이라 Anthropic이 형식이나 인증 방식을 바꾸면 Claude 계정 갱신이 멈출 수 있습니다. 이 경우에도 Codex 계정은 영향을 받지 않습니다.
+- 계정별 Claude Keychain 항목 이름은 Claude Code의 현재 규칙(`Claude Code-credentials-<CLAUDE_CONFIG_DIR의 SHA-256 앞 8자리>`)을 따릅니다. Claude Code가 이 규칙을 바꾸면 해당 계정은 로그인 필요로 표시됩니다.
 - 실제 device-code 로그인과 메뉴바 상호작용 검증은 GUI와 로그인된 계정이 필요합니다.
 
 ## 문제 해결

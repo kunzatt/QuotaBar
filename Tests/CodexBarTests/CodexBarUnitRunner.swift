@@ -19,6 +19,16 @@ struct CodexBarUnitRunner {
             ("latest daily token bucket", testLatestDailyTokenBucket),
             ("polling backoff", testPollingBackoff),
             ("repository persistence", testRepositoryPersistence),
+            ("profile provider decoding", testProfileProviderDecoding),
+            ("managed Claude profile lifecycle", testManagedClaudeProfileLifecycle),
+            ("Claude usage mapping", testClaudeUsageMapping),
+            ("Claude legacy usage mapping", testClaudeLegacyUsageMapping),
+            ("Claude Retry-After parsing", testClaudeRetryAfterParsing),
+            ("Claude scratch-profile renewal", testClaudeScratchRenewal),
+            ("Claude keychain service naming", testClaudeKeychainServiceNaming),
+            ("Claude credential parsing", testClaudeCredentialParsing),
+            ("Claude login URL extraction", testClaudeAuthorizationURLExtraction),
+            ("Claude process runner bounds", testClaudeProcessRunnerBounds),
             ("log redaction", testRedaction)
         ]
         var failures = 0
@@ -131,11 +141,11 @@ struct CodexBarUnitRunner {
 
     private static func testCodexPlanRecognition() throws {
         let plus = ProtocolMapper.accountIdentity(from: try decode(#"{"account":{"planType":"plus"}}"#))
-        try expect(plus.codexPlanName == "Plus", "plus from app-server")
+        try expect(plus.planName == "Plus", "plus from app-server")
         try expect(plus.isPlus, "plus flag")
-        try expect(AccountIdentity(loginType: "chatgpt", email: nil, planType: "pro").codexPlanName == "Pro", "pro")
-        try expect(AccountIdentity(loginType: "chatgpt", email: nil, planType: "prolite").codexPlanName == "Pro Lite", "prolite")
-        try expect(AccountIdentity(loginType: "chatgpt", email: nil, planType: "future-plan").codexPlanName == "future-plan", "unknown plan remains visible")
+        try expect(AccountIdentity(loginType: "chatgpt", email: nil, planType: "pro").planName == "Pro", "pro")
+        try expect(AccountIdentity(loginType: "chatgpt", email: nil, planType: "prolite").planName == "Pro Lite", "prolite")
+        try expect(AccountIdentity(loginType: "chatgpt", email: nil, planType: "future-plan").planName == "future-plan", "unknown plan remains visible")
     }
 
     private static func testPlusFiveHourWindowAvailability() throws {
@@ -242,6 +252,293 @@ struct CodexBarUnitRunner {
         try await reloaded.bootstrap()
         let preferences = await reloaded.currentPreferences()
         try expect(preferences.primaryAccountID == second.id, "primary persistence")
+    }
+
+    private static func testProfileProviderDecoding() throws {
+        let legacy = #"""
+        {"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","alias":"이전 계정","codexHomePath":"file:///tmp/codex-home/","isManagedByApp":true,"isEnabled":true,"createdAt":"2026-09-01T00:00:00Z"}
+        """#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let profile = try decoder.decode(AccountProfile.self, from: Data(legacy.utf8))
+        try expect(profile.provider == .codex, "profiles saved before Claude support stay Codex")
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let claude = AccountProfile(
+            alias: "Claude",
+            codexHomePath: URL(fileURLWithPath: "/tmp/claude-home"),
+            isManagedByApp: true,
+            createdAt: Date(timeIntervalSince1970: 1_790_000_000),
+            provider: .claude
+        )
+        let roundTrip = try decoder.decode(AccountProfile.self, from: encoder.encode(claude))
+        try expect(roundTrip == claude, "Claude profile round-trip")
+    }
+
+    private static func testManagedClaudeProfileLifecycle() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CodexBarTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let profile = try ProfileManager.createManagedProfile(alias: " 회사 Max ", provider: .claude, repositoryRoot: root)
+        try expect(profile.provider == .claude, "provider")
+        try expect(profile.alias == "회사 Max", "alias trimmed")
+        try expect(profile.codexHomePath.lastPathComponent == "claude-home", "Claude config directory")
+        try expect(!FileManager.default.fileExists(atPath: profile.codexHomePath.appendingPathComponent("config.toml").path), "no Codex config")
+        try expect(ClaudeProfilePaths.configDirectoryEnvironment(for: profile) == profile.codexHomePath.path, "managed profile sets CLAUDE_CONFIG_DIR")
+
+        let external = ProfileManager.defaultProfile(alias: "기본 Claude", provider: .claude)
+        try expect(ClaudeProfilePaths.configDirectoryEnvironment(for: external) == nil, "default ~/.claude leaves CLAUDE_CONFIG_DIR unset")
+
+        let mismatched = AccountProfile(
+            id: profile.id,
+            alias: profile.alias,
+            codexHomePath: profile.codexHomePath.deletingLastPathComponent().appendingPathComponent("codex-home"),
+            isManagedByApp: true,
+            provider: .claude
+        )
+        var rejected = false
+        do { try ProfileManager.removeManagedProfile(mismatched, repositoryRoot: root) } catch { rejected = true }
+        try expect(rejected, "Claude profile must point at claude-home before deletion")
+
+        try ProfileManager.removeManagedProfile(profile, repositoryRoot: root)
+        try expect(!FileManager.default.fileExists(atPath: profile.codexHomePath.deletingLastPathComponent().path), "account folder removed")
+    }
+
+    private static func testClaudeUsageMapping() throws {
+        // Shape returned by api.anthropic.com/api/oauth/usage on 2026-10-07.
+        let value = try decode(#"""
+        {"five_hour":{"utilization":99.0,"resets_at":"2026-10-07T02:20:00.103257+00:00"},
+         "seven_day":{"utilization":99.0,"resets_at":"2026-10-12T11:00:00+00:00"},
+         "seven_day_opus":null,
+         "limits":[
+          {"kind":"session","group":"session","percent":38,"resets_at":"2026-10-07T02:20:00.103257+00:00","scope":null},
+          {"kind":"weekly_all","group":"weekly","percent":32,"resets_at":"2026-10-12T11:00:00.103276+00:00","scope":null},
+          {"kind":"weekly_scoped","group":"weekly","percent":12,"resets_at":"2026-10-12T11:00:00+00:00","scope":{"model":{"id":null,"display_name":"Opus"}}},
+          {"kind":"monthly_spend","group":"spend","percent":50,"scope":null},
+          {"kind":"weekly_scoped","group":"weekly","percent":null,"scope":{"model":{"display_name":"Sonnet"}}}
+         ]}
+        """#)
+        let buckets = ClaudeUsageMapper.rateLimitBuckets(from: value)
+        try expect(buckets.count == 2, "main and one scoped bucket; unknown kinds and null percents skipped")
+        let main = buckets[0]
+        try expect(main.limitId == "claude", "main bucket first")
+        try expect(main.primary?.remainingPercent == 62, "session from limits wins over five_hour")
+        try expect(main.primary?.windowDurationMinutes == 300, "five-hour duration")
+        try expect(main.secondary?.remainingPercent == 68, "weekly from limits")
+        try expect(main.shortestWindow == main.primary, "five-hour window is the active one")
+        let fractionalReset = main.primary?.resetsAt?.timeIntervalSince1970 ?? 0
+        try expect(abs(fractionalReset - 1_791_339_600.103257) < 0.001, "fractional reset time")
+        try expect(buckets[1].limitId == "claude_weekly_opus", "scoped id")
+        try expect(buckets[1].displayName == "Opus 주간" && buckets[1].primary?.remainingPercent == 88, "scoped weekly bucket")
+        try expect(buckets[1].primary?.resetsAt == Date(timeIntervalSince1970: 1_791_802_800), "whole-second reset time")
+
+        let snapshot = AccountUsageSnapshot(accountID: UUID(), rateLimitBuckets: buckets)
+        try expect(snapshot.remainingPercent == 62, "menu bar shows the five-hour remainder")
+
+        let empty = ClaudeUsageMapper.rateLimitBuckets(from: try decode(#"{"five_hour":null,"seven_day":null,"limits":[]}"#))
+        try expect(empty.isEmpty, "null windows produce no bucket")
+    }
+
+    private static func testClaudeLegacyUsageMapping() throws {
+        let value = try decode(#"""
+        {"five_hour":{"utilization":40.0,"resets_at":"2026-10-07T02:20:00+00:00"},
+         "seven_day":{"utilization":10.0,"resets_at":"2026-10-12T11:00:00+00:00"},
+         "seven_day_opus":{"utilization":25.0,"resets_at":"2026-10-12T11:00:00+00:00"},
+         "seven_day_oauth_apps":null}
+        """#)
+        let buckets = ClaudeUsageMapper.rateLimitBuckets(from: value)
+        try expect(buckets.count == 2, "named windows without limits")
+        try expect(buckets[0].primary?.remainingPercent == 60 && buckets[0].secondary?.remainingPercent == 90, "main windows")
+        try expect(buckets[1].displayName == "Opus 주간" && buckets[1].primary?.remainingPercent == 75, "named scoped window")
+    }
+
+    private static func testClaudeRetryAfterParsing() throws {
+        let now = Date(timeIntervalSince1970: 1_791_331_200)
+        try expect(ClaudeUsageClient.retryAfterSeconds("120", now: now) == 120, "seconds")
+        try expect(ClaudeUsageClient.retryAfterSeconds("Wed, 07 Oct 2026 00:10:00 GMT", now: now) == 600, "HTTP date")
+        try expect(ClaudeUsageClient.retryAfterSeconds(nil, now: now) == nil, "absent")
+        try expect(ClaudeUsageClient.retryAfterSeconds("soon", now: now) == nil, "garbage")
+    }
+
+    /// Exercises the scratch-profile renewal against a stand-in CLI and file-backed
+    /// credentials, so no real login or Keychain item is involved.
+    private static func testClaudeScratchRenewal() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CodexBarTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let profile = try ProfileManager.createManagedProfile(alias: "renewal", provider: .claude, repositoryRoot: root)
+        let live = profile.codexHomePath.appendingPathComponent(".credentials.json")
+        let tools = root.appendingPathComponent("tools", isDirectory: true)
+        try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+        let fakeCLI = tools.appendingPathComponent("claude")
+        try #"""
+        #!/bin/sh
+        dir=$(dirname "$0")
+        echo call >> "$dir/calls"
+        [ "$1 $2 $3" = "auth login --claudeai" ] || exit 9
+        [ "$BROWSER" = "false" ] || exit 8
+        [ "$CLAUDE_CODE_OAUTH_SCOPES" = "user:inference user:profile" ] || exit 7
+        case "$CLAUDE_CONFIG_DIR" in */ClaudeRenewal/*) ;; *) exit 6 ;; esac
+        case "$(cat "$dir/mode")" in
+          success)
+            [ "$CLAUDE_CODE_OAUTH_REFRESH_TOKEN" = "refresh-old" ] || exit 5
+            expires=$(( ($(date +%s) + 28800) * 1000 ))
+            printf '{"claudeAiOauth":{"accessToken":"access-new","refreshToken":"refresh-new","expiresAt":%s,"scopes":["user:inference","user:profile"],"subscriptionType":"max"}}' "$expires" > "$CLAUDE_CONFIG_DIR/.credentials.json"
+            exit 0 ;;
+          revoked) echo 'Login failed: {"error":"invalid_grant"}' >&2; exit 1 ;;
+          *) echo 'Login failed: Request failed with status code 400' >&2; exit 1 ;;
+        esac
+        """#.write(to: fakeCLI, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeCLI.path)
+
+        func writeLive(accessToken: String, expiresIn seconds: TimeInterval) throws {
+            let expires = Int64((Date.now.timeIntervalSince1970 + seconds) * 1000)
+            let document = #"{"mcpOAuth":{"server":{"accessToken":"mcp"}},"claudeAiOauth":{"accessToken":"\#(accessToken)","refreshToken":"refresh-old","expiresAt":\#(expires),"scopes":["user:inference","user:profile"],"subscriptionType":"max","rateLimitTier":"default_claude_max_20x"}}"#
+            try Data(document.utf8).write(to: live)
+        }
+        func setMode(_ mode: String) throws { try Data(mode.utf8).write(to: tools.appendingPathComponent("mode")) }
+        func calls() -> Int {
+            (try? String(contentsOf: tools.appendingPathComponent("calls"), encoding: .utf8))?.split(separator: "\n").count ?? 0
+        }
+        func liveValue() throws -> JSONValue { try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: live)) }
+
+        // A valid token is returned as is.
+        try writeLive(accessToken: "access-old", expiresIn: 3_600)
+        try setMode("success")
+        let fresh = ClaudeUsageClient(profile: profile, executableURL: fakeCLI)
+        let scratchBefore = (try? FileManager.default.contentsOfDirectory(atPath: ClaudeProfilePaths.renewalRoot.path)) ?? []
+        let untouched = try await fresh.usableCredentials(rejecting: nil)
+        try expect(untouched.accessToken == "access-old", "valid token untouched")
+        try expect(calls() == 0, "no renewal for a valid token")
+
+        // An expired token is renewed in a scratch profile and written back.
+        try writeLive(accessToken: "access-old", expiresIn: -60)
+        let renewed = try await fresh.usableCredentials(rejecting: nil)
+        try expect(renewed.accessToken == "access-new", "renewed token returned")
+        let written = try liveValue()
+        try expect(written["claudeAiOauth"]?["refreshToken"]?.string == "refresh-new", "rotation written back")
+        try expect(written["claudeAiOauth"]?["rateLimitTier"]?.string == "default_claude_max_20x", "other OAuth fields kept")
+        try expect(written["mcpOAuth"]?["server"]?["accessToken"]?.string == "mcp", "rest of the document kept")
+        let scratchAfter = (try? FileManager.default.contentsOfDirectory(atPath: ClaudeProfilePaths.renewalRoot.path)) ?? []
+        try expect(Set(scratchAfter) == Set(scratchBefore), "scratch profile removed")
+
+        // A rejected but unexpired token is renewed too.
+        try writeLive(accessToken: "access-old", expiresIn: 3_600)
+        let afterRejection = try await ClaudeUsageClient(profile: profile, executableURL: fakeCLI).usableCredentials(rejecting: "access-old")
+        try expect(afterRejection.accessToken == "access-new", "rejected token renewed")
+
+        // A transient failure keeps the live login and backs off.
+        try writeLive(accessToken: "access-old", expiresIn: -60)
+        let before = try Data(contentsOf: live)
+        try setMode("transient")
+        let transient = ClaudeUsageClient(profile: profile, executableURL: fakeCLI)
+        let callsBefore = calls()
+        do {
+            _ = try await transient.usableCredentials(rejecting: nil)
+            throw TestFailure("transient failure must throw")
+        } catch let error as CodexBarError {
+            try expect(error == .claudeTokenRenewalFailed, "transient failure is not a sign-out")
+        }
+        let afterTransient = try Data(contentsOf: live)
+        try expect(afterTransient == before, "live credentials untouched on failure")
+        do { _ = try await transient.usableCredentials(rejecting: nil) } catch {}
+        try expect(calls() == callsBefore + 1, "backoff skips an immediate second attempt")
+
+        // A revoked grant asks for sign-in and still keeps the live document.
+        try setMode("revoked")
+        do {
+            _ = try await ClaudeUsageClient(profile: profile, executableURL: fakeCLI).usableCredentials(rejecting: nil)
+            throw TestFailure("revoked grant must throw")
+        } catch let error as CodexBarError {
+            try expect(error == .authenticationRequired, "invalid_grant needs sign-in")
+        }
+        let afterRevoked = try Data(contentsOf: live)
+        try expect(afterRevoked == before, "live credentials untouched when revoked")
+
+        let expiredRotation = try decode(#"{"accessToken":"a","refreshToken":"r","expiresAt":1,"scopes":["s"]}"#)
+        try expect(!ClaudeUsageClient.isCompleteRotation(expiredRotation, replacing: "x"), "expired rotation rejected")
+    }
+
+    private static func testClaudeKeychainServiceNaming() throws {
+        try expect(ClaudeCredentialStore.keychainService(configDirectory: nil) == "Claude Code-credentials", "default login")
+        // Observed from Claude Code 2.1.280: CLAUDE_CONFIG_DIR=/Users/apple/.claude uses this item.
+        try expect(
+            ClaudeCredentialStore.keychainService(configDirectory: "/Users/apple/.claude") == "Claude Code-credentials-dfd91f6e",
+            "configured directory suffix"
+        )
+        // Claude Code hashes the NFC form, so a decomposed path must name the same item.
+        try expect(
+            ClaudeCredentialStore.keychainService(configDirectory: "/tmp/cafe\u{301}") ==
+                ClaudeCredentialStore.keychainService(configDirectory: "/tmp/caf\u{E9}"),
+            "NFC normalization"
+        )
+    }
+
+    private static func testClaudeCredentialParsing() throws {
+        let json = #"{"claudeAiOauth":{"accessToken":"token","refreshToken":"refresh","expiresAt":1790000000000,"subscriptionType":"max","rateLimitTier":"default_claude_max_20x"}}"#
+        guard let credentials = ClaudeCredentialStore.parse(Data(json.utf8)) else { throw TestFailure("credentials parse") }
+        try expect(credentials.hasRefreshToken, "refresh token present")
+        try expect(credentials.planType == "max_20x", "Max tier")
+        try expect(AccountIdentity(loginType: "claude.ai", email: nil, planType: credentials.planType).planName == "Max 20x", "plan label")
+        try expect(credentials.isUsable(at: Date(timeIntervalSince1970: 1_789_990_000)), "valid before expiry")
+        try expect(!credentials.isUsable(at: Date(timeIntervalSince1970: 1_789_999_990)), "expiring token is refreshed first")
+
+        let loggedOut = #"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#
+        guard let cleared = ClaudeCredentialStore.parse(Data(loggedOut.utf8)) else { throw TestFailure("cleared parse") }
+        try expect(!cleared.isUsable(at: .now) && !cleared.hasRefreshToken, "cleared login needs sign-in")
+        try expect(ClaudeCredentialStore.parse(Data("not json".utf8)) == nil, "garbage ignored")
+
+        let pro = ClaudeOAuthCredentials(accessToken: "t", hasRefreshToken: true, expiresAt: nil, subscriptionType: "pro", rateLimitTier: nil)
+        try expect(pro.planType == "pro", "Pro plan")
+    }
+
+    private static func testClaudeAuthorizationURLExtraction() throws {
+        let url = "https://claude.com/cai/oauth/authorize?code=true&state=XYZ"
+        let plain = "Opening browser to sign in…\nIf the browser didn't open, visit: \(url)\nPaste code here if prompted > "
+        try expect(ClaudeUsageMapper.authorizationURL(in: plain)?.absoluteString == url, "plain output")
+
+        let colored = "visit: \u{1B}[36m\(url)\u{1B}[39m\n"
+        try expect(ClaudeUsageMapper.authorizationURL(in: colored)?.absoluteString == url, "colour codes")
+
+        let hyperlinkBEL = "visit: \u{1B}]8;;\(url)\u{07}\(url)\u{1B}]8;;\u{07}\n"
+        try expect(ClaudeUsageMapper.authorizationURL(in: hyperlinkBEL)?.absoluteString == url, "OSC 8 hyperlink with BEL")
+
+        let hyperlinkST = "visit: \u{1B}]8;;\(url)\u{1B}\\\(url)\u{1B}]8;;\u{1B}\\\n"
+        try expect(ClaudeUsageMapper.authorizationURL(in: hyperlinkST)?.absoluteString == url, "OSC 8 hyperlink with ST")
+
+        try expect(ClaudeUsageMapper.authorizationURL(in: "Opening browser to sign in…") == nil, "no URL yet")
+    }
+
+    private static func testClaudeProcessRunnerBounds() async throws {
+        let shell = URL(fileURLWithPath: "/bin/sh")
+        let environment = ProcessInfo.processInfo.environment
+
+        let large = try await ClaudeProcessRunner.run(
+            shell,
+            arguments: ["-c", "head -c 200000 /dev/zero | tr '\\0' a"],
+            environment: environment,
+            timeout: .seconds(10)
+        )
+        try expect(large.status == 0 && large.stdout.count == 200_000, "output larger than a pipe buffer is drained")
+
+        let stubbornStart = Date()
+        let stubborn = try await ClaudeProcessRunner.run(
+            shell,
+            arguments: ["-c", "trap '' TERM; sleep 20"],
+            environment: environment,
+            timeout: .seconds(1)
+        )
+        try expect(Date().timeIntervalSince(stubbornStart) < 10, "SIGTERM-ignoring child is killed")
+        try expect(stubborn.status != 0, "killed child is not a success")
+
+        let inheritedStart = Date()
+        let inherited = try await ClaudeProcessRunner.run(
+            shell,
+            arguments: ["-c", "sleep 6 & echo hi"],
+            environment: environment,
+            timeout: .seconds(10)
+        )
+        try expect(Date().timeIntervalSince(inheritedStart) < 5, "grandchild holding stdout does not block the result")
+        try expect(String(decoding: inherited.stdout, as: UTF8.self) == "hi\n", "output before exit is kept")
     }
 
     private static func testRedaction() throws {

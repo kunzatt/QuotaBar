@@ -180,7 +180,7 @@ private struct EmptyDashboard: View {
             .frame(width: 72, height: 72)
 
             VStack(spacing: 6) {
-                Text("Codex 사용량을 한눈에")
+                Text("Codex·Claude 사용량을 한눈에")
                     .font(.title3.weight(.semibold))
                 Text("계정을 연결하면 남은 쿼터와 초기화 시각을\n메뉴바에서 바로 확인할 수 있습니다.")
                     .font(.subheadline)
@@ -194,7 +194,7 @@ private struct EmptyDashboard: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
 
-            Label("인증 정보는 Mac 안에서 Codex가 직접 관리합니다", systemImage: "lock.shield")
+            Label("로그인은 Mac 안에서 Codex와 Claude Code가 직접 관리합니다", systemImage: "lock.shield")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -218,9 +218,7 @@ private struct PrimaryQuotaCard: View {
                         Text(profile.alias)
                             .font(.headline)
                             .lineLimit(1)
-                        if let planName = snapshot?.identity.codexPlanName {
-                            PlanBadge(text: planName)
-                        }
+                        PlanBadge(text: planBadgeText(profile: profile, snapshot: snapshot))
                     }
 
                     if let email = snapshot?.identity.email {
@@ -341,6 +339,9 @@ private struct OtherAccountRow: View {
                     Text(profile.alias)
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
+                    Text(profile.provider.shortName)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                     if !profile.isEnabled {
                         Text("꺼짐")
                             .font(.caption2.weight(.semibold))
@@ -595,29 +596,29 @@ private struct InlineNotice: View {
 struct AddAccountView: View {
     @ObservedObject var store: UsageStore
     let onClose: () -> Void
+    @State private var provider: AccountProvider = .codex
     @State private var alias = ""
     @State private var activeProfile: AccountProfile?
-    @State private var login: DeviceCodeLogin?
+    @State private var login: AccountLogin?
     @State private var errorText: String?
     @State private var isStarting = false
-    @State private var didCopyCode = false
 
     var body: some View {
         VStack(spacing: 0) {
             SheetHeader(
                 title: "계정 연결",
-                subtitle: login == nil ? "ChatGPT Codex 계정을 CodexBar에 추가합니다" : "브라우저에서 로그인을 완료하세요",
+                subtitle: login == nil ? "Codex 또는 Claude Code 계정을 CodexBar에 추가합니다" : "브라우저에서 로그인을 완료하세요",
                 symbol: "person.badge.plus",
-                dismiss: login == nil ? onClose : nil
+                dismiss: login == nil && !isStarting ? onClose : nil
             )
             Divider()
 
             Group {
                 if let login, let profile = activeProfile {
-                    DeviceLoginPanel(
-                        accountName: profile.alias,
+                    AccountLoginPanel(
+                        store: store,
+                        profile: profile,
                         login: login,
-                        didCopyCode: $didCopyCode,
                         cancelTitle: "연결 취소",
                         cancel: { cancelLogin(profile: profile, login: login) }
                     )
@@ -635,9 +636,21 @@ struct AddAccountView: View {
     private var addAccountForm: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 7) {
+                Text("서비스")
+                    .font(.subheadline.weight(.semibold))
+                Picker("서비스", selection: $provider) {
+                    ForEach(AccountProvider.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
                 Text("계정 이름")
                     .font(.subheadline.weight(.semibold))
-                TextField("예: 개인 Plus", text: $alias)
+                TextField(provider == .codex ? "예: 개인 Plus" : "예: 회사 Max", text: $alias)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { beginLogin() }
                 Text("메뉴바와 계정 목록에만 표시되는 이름입니다.")
@@ -646,7 +659,9 @@ struct AddAccountView: View {
             }
 
             Label {
-                Text("계정마다 별도 로컬 프로필을 사용합니다. CodexBar는 인증 파일 내용을 읽지 않습니다.")
+                Text(provider == .codex
+                    ? "계정마다 별도 로컬 프로필을 사용합니다. CodexBar는 인증 파일 내용을 읽지 않습니다."
+                    : "계정마다 별도 Claude Code 설정 폴더를 사용합니다. 로그인과 토큰 갱신은 Claude Code가 하고, CodexBar는 사용량 조회에만 토큰을 씁니다.")
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
                 Image(systemName: "lock.shield")
@@ -666,6 +681,7 @@ struct AddAccountView: View {
 
             HStack {
                 Button("취소", role: .cancel, action: onClose)
+                    .disabled(isStarting)
                 Spacer()
                 Button {
                     beginLogin()
@@ -691,11 +707,11 @@ struct AddAccountView: View {
         errorText = nil
         Task {
             do {
-                let result = try await store.addManagedAccount(alias: cleanAlias)
+                let result = try await store.addManagedAccount(alias: cleanAlias, provider: provider)
                 activeProfile = result.0
                 login = result.1
-                NSWorkspace.shared.open(result.1.verificationURL)
-                let completed = await store.waitForDeviceLogin(profile: result.0, loginID: result.1.loginID)
+                openDeviceCodeBrowser(for: result.1)
+                let completed = await store.waitForLogin(profile: result.0, loginID: result.1.loginID)
                 if completed {
                     onClose()
                 } else {
@@ -709,7 +725,7 @@ struct AddAccountView: View {
         }
     }
 
-    private func cancelLogin(profile: AccountProfile, login: DeviceCodeLogin) {
+    private func cancelLogin(profile: AccountProfile, login: AccountLogin) {
         Task {
             await store.cancelAndDiscardDeviceLogin(profile: profile, loginID: login.loginID)
             onClose()
@@ -721,10 +737,9 @@ struct ReauthenticateAccountView: View {
     @ObservedObject var store: UsageStore
     let profile: AccountProfile
     let onClose: () -> Void
-    @State private var login: DeviceCodeLogin?
+    @State private var login: AccountLogin?
     @State private var errorText: String?
     @State private var isStarting = false
-    @State private var didCopyCode = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -738,10 +753,10 @@ struct ReauthenticateAccountView: View {
 
             Group {
                 if let login {
-                    DeviceLoginPanel(
-                        accountName: profile.alias,
+                    AccountLoginPanel(
+                        store: store,
+                        profile: profile,
                         login: login,
-                        didCopyCode: $didCopyCode,
                         cancelTitle: "로그인 취소",
                         cancel: { cancelLogin(login) }
                     )
@@ -785,8 +800,8 @@ struct ReauthenticateAccountView: View {
             do {
                 let nextLogin = try await store.beginReauthentication(profile: profile)
                 login = nextLogin
-                NSWorkspace.shared.open(nextLogin.verificationURL)
-                let completed = await store.waitForDeviceLogin(profile: profile, loginID: nextLogin.loginID)
+                openDeviceCodeBrowser(for: nextLogin)
+                let completed = await store.waitForLogin(profile: profile, loginID: nextLogin.loginID)
                 if completed {
                     onClose()
                 } else {
@@ -800,7 +815,7 @@ struct ReauthenticateAccountView: View {
         }
     }
 
-    private func cancelLogin(_ login: DeviceCodeLogin) {
+    private func cancelLogin(_ login: AccountLogin) {
         Task {
             await store.cancelReauthentication(profile: profile, loginID: login.loginID)
             onClose()
@@ -840,6 +855,121 @@ private struct SheetHeader: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
+    }
+}
+
+/// Codex prints a device code for the browser; Claude Code opens its own browser login.
+@MainActor
+private func openDeviceCodeBrowser(for login: AccountLogin) {
+    if case .deviceCode(let deviceLogin) = login {
+        NSWorkspace.shared.open(deviceLogin.verificationURL)
+    }
+}
+
+private struct AccountLoginPanel: View {
+    @ObservedObject var store: UsageStore
+    let profile: AccountProfile
+    let login: AccountLogin
+    let cancelTitle: String
+    let cancel: () -> Void
+    @State private var didCopyCode = false
+
+    var body: some View {
+        switch login {
+        case .deviceCode(let deviceLogin):
+            DeviceLoginPanel(
+                accountName: profile.alias,
+                login: deviceLogin,
+                didCopyCode: $didCopyCode,
+                cancelTitle: cancelTitle,
+                cancel: cancel
+            )
+        case .claudeBrowser(let claudeLogin):
+            ClaudeLoginPanel(
+                accountName: profile.alias,
+                login: claudeLogin,
+                cancelTitle: cancelTitle,
+                submitCode: { code in
+                    Task { await store.submitClaudeLoginCode(profile: profile, loginID: claudeLogin.loginID, code: code) }
+                },
+                cancel: cancel
+            )
+        }
+    }
+}
+
+private struct ClaudeLoginPanel: View {
+    let accountName: String
+    let login: ClaudeBrowserLogin
+    let cancelTitle: String
+    let submitCode: (String) -> Void
+    let cancel: () -> Void
+    @State private var code = ""
+    @State private var didSubmitCode = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 11) {
+                StepNumber(value: 1)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("브라우저에서 Claude 로그인")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Claude Code가 브라우저를 엽니다. 사용할 계정이 \(accountName) 계정인지 확인하세요.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            HStack(alignment: .top, spacing: 11) {
+                StepNumber(value: 2)
+                VStack(alignment: .leading, spacing: 9) {
+                    Text("코드가 표시되면 붙여넣기")
+                        .font(.subheadline.weight(.semibold))
+                    Text("브라우저에서 바로 완료되면 이 단계는 필요 없습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        TextField("표시된 코드 전체", text: $code)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit(submit)
+                            // The CLI ignores a malformed code and keeps waiting, so allow a retry.
+                            .onChange(of: code) { didSubmitCode = false }
+                        Button(didSubmitCode ? "제출됨" : "제출", action: submit)
+                            .buttonStyle(.bordered)
+                            .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || didSubmitCode)
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("로그인 완료를 기다리는 중입니다")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Button(cancelTitle, role: .cancel, action: cancel)
+                Spacer()
+                if let url = login.authorizationURL {
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Label("브라우저 다시 열기", systemImage: "safari")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+    }
+
+    private func submit() {
+        let clean = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, !didSubmitCode else { return }
+        didSubmitCode = true
+        submitCode(clean)
     }
 }
 
@@ -986,7 +1116,7 @@ struct SettingsView: View {
         } message: {
             if let profile = deletionCandidate {
                 Text(profile.isManagedByApp
-                    ? "두 번째 옵션은 이 계정의 Codex 인증 파일만 삭제합니다. 외부 프로필은 건드리지 않습니다."
+                    ? "두 번째 옵션은 이 계정에서 로그아웃하고 앱이 만든 로컬 프로필만 삭제합니다. 외부 프로필은 건드리지 않습니다."
                     : "외부 프로필의 폴더와 인증 파일은 삭제하지 않습니다.")
             }
         }
@@ -1107,14 +1237,20 @@ private struct AccountsSettingsPage: View {
                 }
                 .buttonStyle(.borderedProminent)
 
-                Button {
-                    store.addDefaultCodexProfile(alias: "기본 Codex")
-                } label: {
-                    Label("기본 ~/.codex 사용", systemImage: "terminal")
+                ForEach(AccountProvider.allCases) { provider in
+                    let label = store.defaultHomeLabel(for: provider)
+                    let isRegistered = store.hasDefaultProfile(for: provider)
+                    Button {
+                        store.addDefaultProfile(for: provider)
+                    } label: {
+                        Label("기본 \(label) 사용", systemImage: "terminal")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isRegistered)
+                    .help(isRegistered
+                        ? "기본 \(label) 프로필이 이미 등록되어 있습니다"
+                        : "기존 \(provider.displayName) CLI 로그인을 연결합니다")
                 }
-                .buttonStyle(.bordered)
-                .disabled(hasDefaultProfile)
-                .help(hasDefaultProfile ? "기본 ~/.codex 프로필이 이미 등록되어 있습니다" : "기존 Codex CLI 로그인을 연결합니다")
             }
 
             if store.profiles.isEmpty {
@@ -1146,13 +1282,6 @@ private struct AccountsSettingsPage: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var hasDefaultProfile: Bool {
-        let defaultPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex", isDirectory: true)
-            .standardizedFileURL.path
-        return store.profiles.contains { !$0.isManagedByApp && $0.codexHomePath.standardizedFileURL.path == defaultPath }
     }
 }
 
@@ -1209,6 +1338,7 @@ private struct AccountSettingsRow: View {
                         if isPrimary {
                             SettingsPill(text: "대표", tint: .yellow)
                         }
+                        SettingsPill(text: profile.provider.shortName, tint: .secondary)
                         SettingsPill(text: profile.isManagedByApp ? "앱 관리" : "외부", tint: .secondary)
                     }
 
@@ -1367,7 +1497,7 @@ private struct GeneralSettingsPage: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("인증 정보는 Mac에만 보관됩니다")
                         .font(.subheadline.weight(.medium))
-                    Text("CodexBar는 인증 파일 내용을 읽거나 별도 서버로 전송하지 않습니다. 로그인은 로컬 Codex가 직접 처리합니다.")
+                    Text("로그인은 로컬 Codex와 Claude Code가 직접 처리합니다. Codex 인증 파일은 읽지 않습니다. Claude Code 계정은 Keychain의 액세스 토큰을 메모리로만 읽어 Anthropic 사용량 API에만 보냅니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1444,6 +1574,11 @@ private func activeResetSummary(_ snapshot: AccountUsageSnapshot?) -> String {
     return "\(quotaWindowTitle(window)) · 초기화 \(CodexBarFormatters.resetText(window.resetsAt))"
 }
 
+private func planBadgeText(profile: AccountProfile, snapshot: AccountUsageSnapshot?) -> String {
+    guard let planName = snapshot?.identity.planName else { return profile.provider.shortName }
+    return "\(profile.provider.shortName) \(planName)"
+}
+
 private func shortResetText(_ date: Date?) -> String {
     guard let date else { return "초기화 미상" }
     let relative = RelativeDateTimeFormatter()
@@ -1463,7 +1598,7 @@ private func accountSecondaryText(profile: AccountProfile, snapshot: AccountUsag
 
 private func remainingAccessibilityText(_ remaining: Int?, window: RateLimitWindow?) -> String {
     if let remaining { return "\(quotaWindowTitle(window)) 잔여 \(remaining)퍼센트" }
-    return "Codex 쿼터 정보 없음"
+    return "쿼터 정보 없음"
 }
 
 private func quotaWindowTitle(_ window: RateLimitWindow?) -> String {

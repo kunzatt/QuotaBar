@@ -10,6 +10,7 @@ swiftc -parse-as-library \
   Sources/CodexBar/Protocol.swift \
   Sources/CodexBar/Services.swift \
   Sources/CodexBar/CodexAppServerClient.swift \
+  Sources/CodexBar/ClaudeUsageClient.swift \
   Tests/CodexBarTests/CodexBarUnitRunner.swift \
   -o "$test_dir/CodexBarUnitRunner"
 
