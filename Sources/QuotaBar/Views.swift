@@ -326,13 +326,7 @@ private struct OtherAccountRow: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            ZStack {
-                Circle().fill(statusTint(snapshot).opacity(0.13))
-                Image(systemName: statusSymbol(snapshot))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(statusTint(snapshot))
-            }
-            .frame(width: 34, height: 34)
+            AccountAvatar(provider: profile.provider, snapshot: snapshot, size: 34)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -1322,12 +1316,7 @@ private struct AccountSettingsRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(alignment: .top, spacing: 12) {
-                ZStack {
-                    Circle().fill(statusTint(snapshot).opacity(0.13))
-                    Image(systemName: statusSymbol(snapshot))
-                        .foregroundStyle(statusTint(snapshot))
-                }
-                .frame(width: 38, height: 38)
+                AccountAvatar(provider: profile.provider, snapshot: snapshot, size: 38)
 
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 7) {
@@ -1539,6 +1528,94 @@ private struct SettingsGroup<Content: View>: View {
                 .padding(15)
                 .background(.quaternary.opacity(0.20), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
+    }
+}
+
+/// The service logo with the account's connection state as a small corner badge, so
+/// accounts with the same name can still be told apart at a glance.
+private struct AccountAvatar: View {
+    let provider: AccountProvider
+    let snapshot: AccountUsageSnapshot?
+    let size: CGFloat
+
+    var body: some View {
+        ProviderLogo(provider: provider, size: size)
+            .overlay(alignment: .bottomTrailing) {
+                Image(systemName: statusSymbol(snapshot))
+                    .font(.system(size: size * 0.17, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .frame(width: size * 0.36, height: size * 0.36)
+                    .background(statusTint(snapshot), in: Circle())
+                    .overlay(Circle().strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
+                    .offset(x: size * 0.06, y: size * 0.06)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(provider.displayName), \(snapshot?.connectionState.displayName ?? "대기 중")")
+    }
+}
+
+private struct ProviderLogo: View {
+    let provider: AccountProvider
+    let size: CGFloat
+
+    var body: some View {
+        Image(nsImage: Self.mark(for: provider))
+            .renderingMode(.template)
+            .resizable()
+            .interpolation(.high)
+            .foregroundStyle(.white)
+            .padding(size * (provider == .codex ? 0.2 : 0.16))
+            .frame(width: size, height: size)
+            .background(background, in: Circle())
+            .overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 1))
+    }
+
+    private var background: Color {
+        switch provider {
+        case .codex: Color(red: 0.07, green: 0.07, blue: 0.08)
+        case .claude: Color(red: 0.85, green: 0.47, blue: 0.34)
+        }
+    }
+
+    private static func mark(for provider: AccountProvider) -> NSImage {
+        switch provider {
+        case .codex: codexMark
+        case .claude: claudeMark
+        }
+    }
+
+    private static let codexMark = template(svg: """
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="1.85 1.6 16.6 16.8">
+          <path fill="#000" d="M11.248 18.25q-.825 0-1.568-.314a4.3 4.3 0 0 1-1.32-.874 4 4 0 0 1-1.304.214 4 4 0 0 1-2.046-.544 4.27 4.27 0 0 1-1.518-1.485 4 4 0 0 1-.56-2.095q0-.48.131-1.04A4.4 4.4 0 0 1 2.04 10.71a4.07 4.07 0 0 1 .017-3.4 4.2 4.2 0 0 1 1.056-1.418 3.8 3.8 0 0 1 1.6-.842 3.9 3.9 0 0 1 .76-1.683q.593-.759 1.451-1.188a4.04 4.04 0 0 1 1.832-.429q.825 0 1.567.313.742.314 1.32.875a4 4 0 0 1 1.304-.215q1.106 0 2.046.545a4.14 4.14 0 0 1 1.501 1.485q.578.941.578 2.095 0 .48-.132 1.04.66.61 1.023 1.419.363.792.363 1.666 0 .892-.38 1.717a4.3 4.3 0 0 1-1.072 1.435 3.8 3.8 0 0 1-1.584.825 3.8 3.8 0 0 1-.775 1.683 4.06 4.06 0 0 1-1.436 1.188 4.04 4.04 0 0 1-1.832.429m-4.076-2.062q.825 0 1.435-.347l3.103-1.782a.36.36 0 0 0 .164-.313v-1.42L7.881 14.62a.67.67 0 0 1-.726 0l-3.118-1.798a.5.5 0 0 1-.017.115v.198q0 .841.396 1.551.413.693 1.139 1.089a3.2 3.2 0 0 0 1.617.412m.165-2.69a.4.4 0 0 0 .181.05q.083 0 .165-.05l1.238-.71-3.977-2.31a.7.7 0 0 1-.363-.643v-3.58q-.825.362-1.32 1.122a2.9 2.9 0 0 0-.495 1.65q0 .809.413 1.55.412.743 1.072 1.123zm3.91 3.663q.875 0 1.585-.396a2.96 2.96 0 0 0 1.534-2.64v-3.564a.32.32 0 0 0-.165-.297l-1.254-.726v4.604a.7.7 0 0 1-.363.643l-3.119 1.799a3 3 0 0 0 1.783.577m.627-6.039V8.878L10.01 7.822 8.129 8.878v2.244l1.881 1.056zM7.057 5.859a.7.7 0 0 1 .363-.644l3.119-1.798a3 3 0 0 0-1.782-.578q-.874 0-1.584.396A2.96 2.96 0 0 0 6.05 4.324a3.07 3.07 0 0 0-.396 1.551v3.547q0 .199.165.314l1.237.726zm8.383 7.887q.825-.364 1.303-1.123.495-.758.495-1.65a3.15 3.15 0 0 0-.412-1.55q-.413-.743-1.073-1.123l-3.086-1.782q-.099-.065-.181-.049a.3.3 0 0 0-.165.05l-1.238.692 3.993 2.327a.6.6 0 0 1 .264.264.64.64 0 0 1 .1.363zm-3.317-8.382a.63.63 0 0 1 .726 0l3.135 1.831v-.297q0-.792-.396-1.501a2.86 2.86 0 0 0-1.105-1.155q-.71-.43-1.65-.43-.825 0-1.436.347L8.294 5.941a.36.36 0 0 0-.165.314v1.418z"/>
+        </svg>
+        """, fallback: "chevron.left.forwardslash.chevron.right")
+
+    private static let claudeMark = template(svg: """
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="2.6" fill="#000"/>
+          <g stroke="#000" stroke-width="1.9" stroke-linecap="round">
+          <line x1="14.19" y1="11.81" x2="21.36" y2="11.18"/>
+          <line x1="13.73" y1="10.65" x2="18.38" y2="7.01"/>
+          <line x1="13.00" y1="10.04" x2="16.09" y2="3.98"/>
+          <line x1="11.73" y1="9.82" x2="11.06" y2="4.36"/>
+          <line x1="10.83" y1="10.13" x2="6.91" y2="3.86"/>
+          <line x1="9.99" y1="11.11" x2="4.69" y2="8.75"/>
+          <line x1="9.81" y1="12.15" x2="2.82" y2="12.64"/>
+          <line x1="10.27" y1="13.35" x2="6.01" y2="16.68"/>
+          <line x1="11.00" y1="13.96" x2="7.69" y2="20.46"/>
+          <line x1="12.23" y1="14.19" x2="12.87" y2="20.25"/>
+          <line x1="13.32" y1="13.76" x2="17.30" y2="19.03"/>
+          <line x1="13.98" y1="12.96" x2="19.10" y2="15.46"/>
+          </g>
+        </svg>
+        """, fallback: "asterisk")
+
+    private static func template(svg: String, fallback: String) -> NSImage {
+        let image = NSImage(data: Data(svg.utf8))
+            ?? NSImage(systemSymbolName: fallback, accessibilityDescription: nil)
+            ?? NSImage()
+        image.isTemplate = true
+        return image
     }
 }
 
