@@ -516,8 +516,9 @@ actor ClaudeUsageClient {
     static let renewAhead: TimeInterval = 120
 
     private let profile: AccountProfile
-    /// Tests substitute a stand-in CLI; the app locates the installed one.
+    /// Tests substitute a stand-in CLI and scratch location; the app uses the real ones.
     private let executableURL: URL?
+    private let renewalRoot: URL
     private let session = URLSession(configuration: .ephemeral)
     private var cachedResult: ProviderRefreshResult?
     private var lastFetchedAt: Date?
@@ -544,9 +545,10 @@ actor ClaudeUsageClient {
     private var loginWasCancelled = false
     private var loginWaiter: CheckedContinuation<Void, Error>?
 
-    init(profile: AccountProfile, executableURL: URL? = nil) {
+    init(profile: AccountProfile, executableURL: URL? = nil, renewalRoot: URL = ClaudeProfilePaths.renewalRoot) {
         self.profile = profile
         self.executableURL = executableURL
+        self.renewalRoot = renewalRoot
     }
 
     func refresh(includeUsage: Bool) async throws -> ProviderRefreshResult {
@@ -798,7 +800,7 @@ actor ClaudeUsageClient {
               let scopes = oauth["scopes"]?.array?.compactMap(\.string), !scopes.isEmpty,
               scopes.allSatisfy({ !$0.isEmpty }) else { return .failed(loginRequired: true) }
 
-        let scratch = ClaudeProfilePaths.renewalRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let scratch = renewalRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         do {
             try FileManager.default.createDirectory(
                 at: scratch,

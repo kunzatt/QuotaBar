@@ -38,10 +38,23 @@ actor AccountRepository {
     private func migrateLegacyRoot() async throws {
         let manager = FileManager.default
         guard let legacyRootURL,
-              !manager.fileExists(atPath: rootURL.path),
-              manager.fileExists(atPath: legacyRootURL.path) else { return }
-        try manager.createDirectory(at: rootURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try manager.moveItem(at: legacyRootURL, to: rootURL)
+              !manager.fileExists(atPath: preferencesURL.path),
+              manager.fileExists(atPath: legacyRootURL.appendingPathComponent("accounts.json").path) else { return }
+        if manager.fileExists(atPath: rootURL.path) {
+            // A QuotaBar folder without accounts can already hold scratch folders. Move the
+            // legacy entries in beside them and leave any name clash in the legacy folder.
+            for name in try manager.contentsOfDirectory(atPath: legacyRootURL.path) {
+                let target = rootURL.appendingPathComponent(name)
+                guard !manager.fileExists(atPath: target.path) else { continue }
+                try manager.moveItem(at: legacyRootURL.appendingPathComponent(name), to: target)
+            }
+            if (try? manager.contentsOfDirectory(atPath: legacyRootURL.path))?.isEmpty == true {
+                try? manager.removeItem(at: legacyRootURL)
+            }
+        } else {
+            try manager.createDirectory(at: rootURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try manager.moveItem(at: legacyRootURL, to: rootURL)
+        }
 
         guard let data = try? Data(contentsOf: preferencesURL),
               var migrated = try? JSONDecoder.quotaBar.decode(QuotaBarPreferences.self, from: data) else { return }
