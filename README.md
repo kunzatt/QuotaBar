@@ -1,39 +1,53 @@
-# CodexBar
+# QuotaBar
 
 [English](README.en.md)
 
-CodexBar는 여러 ChatGPT Plus, Pro, Pro Lite Codex 계정과 Claude Code(claude.ai Pro·Max) 계정의 남은 쿼터를 macOS 메뉴바에서 확인하는 앱입니다. 대표 계정의 `41%` 같은 잔여량을 메뉴바에 표시하고, 클릭하면 초기화 시각과 계정 상태를 우선한 사용량 패널을 엽니다. 포인터를 올리면 대표 계정 요약을 툴팁으로 보여주며 시스템 라이트·다크 모드를 자동으로 따릅니다.
+QuotaBar는 여러 ChatGPT Plus, Pro, Pro Lite Codex 계정과 Claude Code(claude.ai Pro·Max) 계정의 남은 쿼터를 macOS 메뉴바에서 확인하는 앱입니다. 대표 계정의 `41%` 같은 잔여량을 메뉴바에 표시하고, 클릭하면 초기화 시각과 계정 상태를 우선한 사용량 패널을 엽니다. 포인터를 올리면 대표 계정 요약을 툴팁으로 보여주며 시스템 라이트·다크 모드를 자동으로 따릅니다.
 
-Finder와 Desktop에는 파란 Codex 심볼 아래 굵은 `Codex Bar` 텍스트가 있는 전용 앱 아이콘을 사용합니다.
+Finder와 Desktop에는 파란 게이지 심볼 아래 굵은 `Quota Bar` 텍스트가 있는 전용 앱 아이콘을 사용하고, 메뉴바에도 같은 게이지 모양을 표시합니다.
 
-> 스크린샷 자리: 첫 실행 후 메뉴바의 CodexBar 아이콘과 팝오버를 캡처해 이곳에 추가하세요.
+> 스크린샷 자리: 첫 실행 후 메뉴바의 QuotaBar 아이콘과 팝오버를 캡처해 이곳에 추가하세요.
 
 ## Homebrew 설치와 원격 업데이트
 
-Apple Silicon Mac에서는 Homebrew Cask로 설치할 수 있습니다. `codexbar`라는 이름은 이미 다른 앱이 사용 중이므로 이 앱의 Cask 이름은 `codexbar-for-mac`입니다.
+Apple Silicon Mac에서는 Homebrew Cask로 설치할 수 있습니다. Cask 이름은 `quotabar`입니다.
 
 ```zsh
-brew tap kunzatt/codex-bar-for-mac https://github.com/kunzatt/codex-bar-for-Mac.git
-brew trust --cask kunzatt/codex-bar-for-mac/codexbar-for-mac
-brew install --cask codexbar-for-mac
+brew tap kunzatt/quotabar https://github.com/kunzatt/QuotaBar.git
+brew trust --cask kunzatt/quotabar/quotabar
+brew install --cask quotabar
 ```
 
-첫 설정 뒤에는 `brew install --cask codexbar-for-mac`과 `brew upgrade --cask codexbar-for-mac`만 사용하면 됩니다.
+첫 설정 뒤에는 `brew install --cask quotabar`과 `brew upgrade --cask quotabar`만 사용하면 됩니다.
 
 새 버전이 GitHub Release에 올라온 뒤 다음 명령으로 원격 업데이트합니다.
 
 ```zsh
 brew update
-brew upgrade --cask codexbar-for-mac
+brew upgrade --cask quotabar
 ```
+
+### CodexBar에서 옮겨오기
+
+QuotaBar는 0.2.0부터 쓰는 새 이름이며, 이전 이름은 CodexBar(`codexbar-for-mac`)였습니다. 이미 CodexBar를 쓰고 있다면 앱을 종료한 뒤 다음을 실행합니다. 계정 데이터를 지우지 않도록 `--zap`은 붙이지 마세요.
+
+```zsh
+brew uninstall --cask codexbar-for-mac
+brew untap kunzatt/codex-bar-for-mac
+brew tap kunzatt/quotabar https://github.com/kunzatt/QuotaBar.git
+brew trust --cask kunzatt/quotabar/quotabar
+brew install --cask quotabar
+```
+
+QuotaBar를 처음 실행하면 `~/Library/Application Support/CodexBar`의 계정 데이터를 `QuotaBar` 폴더로 옮기므로 연결한 계정이 그대로 유지됩니다. 로그인 시 실행을 켜 두었다면 새 앱으로 다시 등록합니다.
 
 제거할 때 로그인 프로필까지 지우려면 다음을 사용합니다.
 
 ```zsh
-brew uninstall --zap --cask codexbar-for-mac
+brew uninstall --zap --cask quotabar
 ```
 
-릴리스 제작자는 앱의 `CFBundleShortVersionString`을 올린 뒤 아래 명령으로 GitHub Release용 ZIP과 SHA-256을 생성합니다. 생성된 SHA-256을 `Casks/codexbar-for-mac.rb`에 반영하고, ZIP을 같은 버전의 `v<version>` GitHub Release에 업로드합니다.
+릴리스 제작자는 앱의 `CFBundleShortVersionString`을 올린 뒤 아래 명령으로 GitHub Release용 ZIP과 SHA-256을 생성합니다. 생성된 SHA-256을 `Casks/quotabar.rb`에 반영하고, ZIP을 같은 버전의 `v<version>` GitHub Release에 업로드합니다.
 
 ```zsh
 ./scripts/package-release.sh
@@ -53,33 +67,33 @@ Claude Code에는 사용량을 묻는 로컬 프로토콜이 없습니다. 그�
 
 ## 빌드와 실행
 
-Xcode가 설치된 환경에서는 [CodexBar.xcodeproj](CodexBar.xcodeproj/project.pbxproj)를 열고 `CodexBar` scheme을 실행합니다. 앱은 `LSUIElement` 설정을 사용하므로 Dock 아이콘 없이 메뉴바에서만 동작합니다.
+Xcode가 설치된 환경에서는 [QuotaBar.xcodeproj](QuotaBar.xcodeproj/project.pbxproj)를 열고 `QuotaBar` scheme을 실행합니다. 앱은 `LSUIElement` 설정을 사용하므로 Dock 아이콘 없이 메뉴바에서만 동작합니다.
 
 터미널에서는 다음을 실행할 수 있습니다.
 
 ```zsh
-cd CodexBar
+cd QuotaBar
 ./scripts/build.sh
 ```
 
 터미널 없이 실행할 `.app` 번들은 다음 명령으로 만듭니다.
 
 ```zsh
-cd CodexBar
+cd QuotaBar
 ./scripts/package-app.sh
-open dist/CodexBar.app
+open dist/QuotaBar.app
 ```
 
-생성된 `dist/CodexBar.app`을 `/Applications`로 드래그하면 일반 macOS 앱처럼 Finder나 Spotlight에서 실행할 수 있습니다. 같은 앱을 터미널과 Finder에서 동시에 실행하면 메뉴바 항목이 중복되므로, 한 방식만 실행하세요.
+생성된 `dist/QuotaBar.app`을 `/Applications`로 드래그하면 일반 macOS 앱처럼 Finder나 Spotlight에서 실행할 수 있습니다. 같은 앱을 터미널과 Finder에서 동시에 실행하면 메뉴바 항목이 중복되므로, 한 방식만 실행하세요.
 
 한 위치에 설치한 앱을 이후 버전으로 교체하려면 앱을 먼저 종료한 뒤 다음을 실행합니다. 기존 번들은 휴지통으로 이동하므로 필요하면 복구할 수 있습니다.
 
 ```zsh
-cd CodexBar
-./scripts/install-or-update.sh "$HOME/Applications/CodexBar.app"
+cd QuotaBar
+./scripts/install-or-update.sh "$HOME/Applications/QuotaBar.app"
 ```
 
-다른 위치를 계속 쓰려면 해당 위치를 인자로 넘기면 됩니다. 예를 들어 Desktop 설치본은 `./scripts/install-or-update.sh "$HOME/Desktop/CodexBar.app"`로 갱신합니다.
+다른 위치를 계속 쓰려면 해당 위치를 인자로 넘기면 됩니다. 예를 들어 Desktop 설치본은 `./scripts/install-or-update.sh "$HOME/Desktop/QuotaBar.app"`로 갱신합니다.
 
 전체 Xcode가 없으면 스크립트가 Swift Package 빌드로 대체합니다. 이는 소스 컴파일 검증용이며, 메뉴바 UI 실행에는 macOS GUI 세션이 필요합니다.
 
@@ -88,7 +102,7 @@ cd CodexBar
 프레임워크 의존성이 없는 단위 테스트 러너는 다음과 같습니다.
 
 ```zsh
-cd CodexBar
+cd QuotaBar
 ./scripts/test.sh
 ```
 
@@ -99,16 +113,16 @@ cd CodexBar
 1. 메뉴바의 `C --`를 클릭하고 **계정 추가**를 선택합니다.
 2. 별칭을 정하고 **Device Code 로그인 시작**을 누릅니다.
 3. 브라우저가 열리면 원하는 ChatGPT Plus, Pro 또는 Pro Lite 계정으로 로그인하고 화면에 표시된 코드를 입력합니다.
-4. 로그인 완료 알림을 받으면 CodexBar가 계정/플랜/쿼터를 다시 읽습니다.
+4. 로그인 완료 알림을 받으면 QuotaBar가 계정/플랜/쿼터를 다시 읽습니다.
 
 추가 계정도 같은 순서를 반복합니다. 계정마다 독립된 `CODEX_HOME`과 `codex app-server` 프로세스를 사용하므로 인증이 섞이지 않습니다.
 
-기존 기본 Codex 로그인(`~/.codex`)을 쓰려면 설정의 **기본 ~/.codex 등록**을 선택할 수 있습니다. 이 프로필은 외부 프로필로 표시되며, CodexBar가 디렉터리나 인증 파일을 삭제하지 않습니다.
+기존 기본 Codex 로그인(`~/.codex`)을 쓰려면 설정의 **기본 ~/.codex 등록**을 선택할 수 있습니다. 이 프로필은 외부 프로필로 표시되며, QuotaBar가 디렉터리나 인증 파일을 삭제하지 않습니다.
 
 ### Claude Code 계정
 
 1. **계정 연결**에서 서비스를 **Claude Code**로 바꾸고 별칭을 입력한 뒤 **로그인 계속**을 누릅니다.
-2. Claude Code가 브라우저를 엽니다. 원하는 claude.ai 계정으로 로그인하면 자동으로 완료됩니다. 브라우저에 코드가 표시되면 CodexBar 창에 붙여넣고 **제출**을 누릅니다.
+2. Claude Code가 브라우저를 엽니다. 원하는 claude.ai 계정으로 로그인하면 자동으로 완료됩니다. 브라우저에 코드가 표시되면 QuotaBar 창에 붙여넣고 **제출**을 누릅니다.
 3. 계정마다 독립된 `CLAUDE_CONFIG_DIR`을 쓰므로 로그인이 섞이지 않습니다. 이미 터미널에서 쓰는 기본 로그인(`~/.claude`)은 설정의 **기본 ~/.claude 사용**으로 연결합니다.
 
 Claude 사용량은 5시간 한도와 주간 한도로 표시하며, 메뉴바에는 5시간 한도의 잔여량을 보여줍니다. 모델별 주간 한도가 있으면 팝오버에 별도 항목으로 나옵니다. 백그라운드 갱신은 Codex와 같은 주기로 돌지만, 비공식 API 호출은 계정마다 약 1분에 한 번으로 제한합니다. API가 호출 제한(429)을 알리면 `Retry-After`와 5분부터 최대 1시간까지 늘어나는 대기 중 긴 쪽을 지킵니다.
@@ -127,7 +141,7 @@ Claude 사용량은 5시간 한도와 주간 한도로 표시하며, 메뉴바�
 앱이 만든 계정 메타데이터는 다음에 저장됩니다.
 
 ```text
-~/Library/Application Support/CodexBar/
+~/Library/Application Support/QuotaBar/
 ├── accounts.json
 ├── Accounts/<account-uuid>/codex-home/
 └── Accounts/<account-uuid>/claude-home/
@@ -135,7 +149,7 @@ Claude 사용량은 5시간 한도와 주간 한도로 표시하며, 메뉴바�
 
 애플리케이션 지원 디렉터리와 계정별 디렉터리는 `0700`, 메타데이터와 생성된 `auth.json`은 가능한 경우 `0600` 권한으로 유지합니다. `accounts.json`에는 별칭, UUID, 로컬 경로, 활성화/대표 계정 설정만 저장합니다.
 
-CodexBar는 `auth.json`의 내용을 직접 읽거나 파싱하지 않습니다.
+QuotaBar는 `auth.json`의 내용을 직접 읽거나 파싱하지 않습니다.
 
 Claude Code 계정은 예외입니다. 사용량 API를 호출하려고 Claude Code가 macOS Keychain에 저장한 OAuth 액세스 토큰을 `/usr/bin/security`로 읽습니다. 토큰은 메모리에만 두고 `api.anthropic.com`으로만 보냅니다. 토큰이 만료 2분 전이거나 API가 거부하면, 빈 임시 프로필에서 `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`과 함께 `claude auth login`을 실행해 Claude Code가 새 토큰을 받게 합니다. 새 토큰이 완전한지 확인한 뒤에만 원래 Keychain 항목에 Claude Code와 같은 방식(`security -i`)으로 다시 씁니다. 갱신이 실패해도 원래 로그인은 건드리지 않으며, 임시 프로필과 그 Keychain 항목은 바로 지웁니다. 로그인과 로그아웃도 `claude auth login`/`claude auth logout`이 처리합니다. 토큰·쿠키·API 키·프롬프트·대화 내용도 저장하거나 로그로 남기지 않습니다. stderr는 드레인만 하며 영구 저장하지 않고, 오류 표시도 자격 증명 문자열을 노출하지 않는 일반 메시지로 제한합니다.
 
@@ -162,10 +176,10 @@ Claude Code 계정은 예외입니다. 사용량 API를 호출하려고 Claude C
 
 Codex CLI가 최신인지 확인한 뒤 설정에서 실행 파일 경로를 점검하세요. 계정은 등록되지만 플랜/쿼터가 제공되지 않을 수 있으며, 이 경우 앱은 `C --` 및 마지막 오류 상태를 유지합니다.
 
-**“CodexBar을(를) 열지 않음” Gatekeeper 경고**
+**“QuotaBar을(를) 열지 않음” Gatekeeper 경고**
 
 현재 GitHub/Homebrew 배포본은 Apple Developer ID 공증 전의 개인 배포본입니다. 경고가 표시되면 Finder에서 앱을 한 번 실행한 뒤 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**를 선택하세요. Gatekeeper를 전역으로 끄지 마세요. 이 안내는 Developer ID 서명·Apple 공증 릴리스가 준비되면 제거됩니다.
 
 **앱 제거와 인증 파일**
 
-앱 관리 프로필은 설정의 **로그아웃 후 로컬 프로필 삭제**를 선택하면 해당 UUID 계정 폴더만 지웁니다. `~/.codex`를 포함한 외부 프로필은 목록에서만 제거되며, 앱을 삭제해도 인증 파일은 남습니다. 필요하면 Finder에서 `~/Library/Application Support/CodexBar`를 직접 제거하세요.
+앱 관리 프로필은 설정의 **로그아웃 후 로컬 프로필 삭제**를 선택하면 해당 UUID 계정 폴더만 지웁니다. `~/.codex`를 포함한 외부 프로필은 목록에서만 제거되며, 앱을 삭제해도 인증 파일은 남습니다. 필요하면 Finder에서 `~/Library/Application Support/QuotaBar`를 직접 제거하세요.

@@ -50,7 +50,7 @@ actor CodexAppServerClient: CodexUsageProvider {
             timeout: .seconds(20)
         )
         guard !(account["requiresOpenaiAuth"]?.bool == true && account["account"]?.object == nil) else {
-            throw CodexBarError.authenticationRequired
+            throw QuotaBarError.authenticationRequired
         }
         shouldRefreshAccountToken = false
 
@@ -78,7 +78,7 @@ actor CodexAppServerClient: CodexUsageProvider {
             params: .object(["type": .string("chatgptDeviceCode")]),
             timeout: .seconds(20)
         )
-        guard let login = ProtocolMapper.deviceCodeLogin(from: result) else { throw CodexBarError.invalidLoginResponse }
+        guard let login = ProtocolMapper.deviceCodeLogin(from: result) else { throw QuotaBarError.invalidLoginResponse }
         return login
     }
 
@@ -115,7 +115,7 @@ actor CodexAppServerClient: CodexUsageProvider {
         initializationTask?.cancel()
         initializationTask = nil
         let activeProcess = process
-        clearProcessState(error: CodexBarError.processExited)
+        clearProcessState(error: QuotaBarError.processExited)
         activeProcess?.terminate()
         // Give the child a short grace period before the host application is allowed to exit.
         for _ in 0..<10 where activeProcess?.isRunning == true {
@@ -144,13 +144,13 @@ actor CodexAppServerClient: CodexUsageProvider {
     /// Multiple account reads are allowed to overlap, but process initialization must be single-flight.
     /// Otherwise two first requests can terminate one another's just-launched app-server process.
     private func startAndInitialize() async throws {
-        if process != nil { clearProcessState(error: CodexBarError.processExited) }
+        if process != nil { clearProcessState(error: QuotaBarError.processExited) }
         try launch()
         do {
             _ = try await issueRequest(
                 method: "initialize",
                 params: .object([
-                    "clientInfo": .object(["name": .string("codexbar"), "version": .string("0.1.5")]),
+                    "clientInfo": .object(["name": .string("quotabar"), "version": .string(AppInfo.version)]),
                     "capabilities": .object(["experimentalApi": .bool(false)])
                 ]),
                 timeout: .seconds(10)
@@ -167,7 +167,7 @@ actor CodexAppServerClient: CodexUsageProvider {
 
     private func launch() throws {
         guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
-            throw CodexBarError.executableNotUsable(executableURL)
+            throw QuotaBarError.executableNotUsable(executableURL)
         }
         let nextProcess = Process()
         let input = Pipe()
@@ -241,7 +241,7 @@ actor CodexAppServerClient: CodexUsageProvider {
     }
 
     private func write(_ data: Data) throws {
-        guard let inputPipe else { throw CodexBarError.processExited }
+        guard let inputPipe else { throw QuotaBarError.processExited }
         try inputPipe.fileHandleForWriting.write(contentsOf: data)
     }
 
@@ -253,13 +253,13 @@ actor CodexAppServerClient: CodexUsageProvider {
         if let requestID = message.id?.integerValue, let pendingRequest = pending.removeValue(forKey: requestID) {
             if let error = message.error {
                 let mapped: Error = Self.isExplicitAuthenticationFailure(error)
-                    ? CodexBarError.authenticationRequired
-                    : CodexBarError.server("server request failed")
+                    ? QuotaBarError.authenticationRequired
+                    : QuotaBarError.server("server request failed")
                 pendingRequest.continuation.resume(throwing: mapped)
             } else if let result = message.result {
                 pendingRequest.continuation.resume(returning: result)
             } else {
-                pendingRequest.continuation.resume(throwing: CodexBarError.malformedResponse)
+                pendingRequest.continuation.resume(throwing: QuotaBarError.malformedResponse)
             }
             return
         }
@@ -273,7 +273,7 @@ actor CodexAppServerClient: CodexUsageProvider {
             return
         }
         let successful = message.params?["success"]?.bool ?? false
-        let result: Result<Void, Error> = successful ? .success(()) : .failure(CodexBarError.authenticationRequired)
+        let result: Result<Void, Error> = successful ? .success(()) : .failure(QuotaBarError.authenticationRequired)
         if let waiter = loginWaiters.removeValue(forKey: loginID) {
             waiter.resume(with: result)
         } else {
@@ -283,16 +283,16 @@ actor CodexAppServerClient: CodexUsageProvider {
 
     private func timeoutRequest(_ requestID: Int) {
         guard let request = pending.removeValue(forKey: requestID) else { return }
-        request.continuation.resume(throwing: CodexBarError.timeout(method: request.method))
+        request.continuation.resume(throwing: QuotaBarError.timeout(method: request.method))
     }
 
     private func timeoutLogin(_ loginID: String) {
         guard let waiter = loginWaiters.removeValue(forKey: loginID) else { return }
-        waiter.resume(throwing: CodexBarError.timeout(method: "account/login/start"))
+        waiter.resume(throwing: QuotaBarError.timeout(method: "account/login/start"))
     }
 
     private func processDidExit() {
-        clearProcessState(error: CodexBarError.processExited)
+        clearProcessState(error: QuotaBarError.processExited)
     }
 
     private func clearProcessState(error: Error) {

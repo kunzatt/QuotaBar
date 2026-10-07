@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "A10000000000000000000040"
-               BuildableName = "CodexBar.app"
-               BlueprintName = "CodexBar"
-               ReferencedContainer = "container:CodexBar.xcodeproj">
+               BuildableName = "QuotaBar.app"
+               BlueprintName = "QuotaBar"
+               ReferencedContainer = "container:QuotaBar.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -43,9 +43,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A10000000000000000000040"
-            BuildableName = "CodexBar.app"
-            BlueprintName = "CodexBar"
-            ReferencedContainer = "container:CodexBar.xcodeproj">
+            BuildableName = "QuotaBar.app"
+            BlueprintName = "QuotaBar"
+            ReferencedContainer = "container:QuotaBar.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -60,9 +60,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A10000000000000000000040"
-            BuildableName = "CodexBar.app"
-            BlueprintName = "CodexBar"
-            ReferencedContainer = "container:CodexBar.xcodeproj">
+            BuildableName = "QuotaBar.app"
+            BlueprintName = "QuotaBar"
+            ReferencedContainer = "container:QuotaBar.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

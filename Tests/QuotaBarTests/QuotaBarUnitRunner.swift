@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 @main
-struct CodexBarUnitRunner {
+struct QuotaBarUnitRunner {
     static func main() async {
         let tests: [(String, () async throws -> Void)] = [
             ("initialize response decoding", testInitializeResponse),
@@ -19,6 +19,7 @@ struct CodexBarUnitRunner {
             ("latest daily token bucket", testLatestDailyTokenBucket),
             ("polling backoff", testPollingBackoff),
             ("repository persistence", testRepositoryPersistence),
+            ("CodexBar data migration", testLegacyStorageMigration),
             ("profile provider decoding", testProfileProviderDecoding),
             ("managed Claude profile lifecycle", testManagedClaudeProfileLifecycle),
             ("Claude usage mapping", testClaudeUsageMapping),
@@ -134,9 +135,9 @@ struct CodexBarUnitRunner {
     private static func testDurationAndClamp() throws {
         try expect(RateLimitWindow(usedPercent: -20).remainingPercent == 100, "lower clamp")
         try expect(RateLimitWindow(usedPercent: 150).remainingPercent == 0, "upper clamp")
-        try expect(CodexBarFormatters.windowText(300) == "5시간", "five hours")
-        try expect(CodexBarFormatters.windowText(10_080) == "1주", "one week")
-        try expect(CodexBarFormatters.windowText(73) == "73분", "arbitrary duration")
+        try expect(QuotaBarFormatters.windowText(300) == "5시간", "five hours")
+        try expect(QuotaBarFormatters.windowText(10_080) == "1주", "one week")
+        try expect(QuotaBarFormatters.windowText(73) == "73분", "arbitrary duration")
     }
 
     private static func testCodexPlanRecognition() throws {
@@ -223,11 +224,11 @@ struct CodexBarUnitRunner {
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 9))!
         try expect(
-            CodexBarFormatters.dailyUsageLabel(for: "2026-09-09", now: now, calendar: calendar) == "오늘",
+            QuotaBarFormatters.dailyUsageLabel(for: "2026-09-09", now: now, calendar: calendar) == "오늘",
             "today label"
         )
         try expect(
-            CodexBarFormatters.dailyUsageLabel(for: "2026-09-08", now: now, calendar: calendar) == "최근 일 · 2026-09-08",
+            QuotaBarFormatters.dailyUsageLabel(for: "2026-09-08", now: now, calendar: calendar) == "최근 일 · 2026-09-08",
             "historical bucket label"
         )
     }
@@ -241,17 +242,48 @@ struct CodexBarUnitRunner {
     }
 
     private static func testRepositoryPersistence() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CodexBarTests-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("QuotaBarTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let repository = AccountRepository(rootURL: root)
         try await repository.bootstrap()
         let first = AccountProfile(alias: "첫 계정", codexHomePath: root.appendingPathComponent("first"), isManagedByApp: true)
         let second = AccountProfile(alias: "둘째 계정", codexHomePath: root.appendingPathComponent("second"), isManagedByApp: true)
-        _ = try await repository.save(CodexBarPreferences(profiles: [first, second], primaryAccountID: second.id))
+        _ = try await repository.save(QuotaBarPreferences(profiles: [first, second], primaryAccountID: second.id))
         let reloaded = AccountRepository(rootURL: root)
         try await reloaded.bootstrap()
         let preferences = await reloaded.currentPreferences()
         try expect(preferences.primaryAccountID == second.id, "primary persistence")
+    }
+
+    private static func testLegacyStorageMigration() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("QuotaBarTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let legacy = base.appendingPathComponent("CodexBar", isDirectory: true)
+        let root = base.appendingPathComponent("QuotaBar", isDirectory: true)
+        let legacyRepository = AccountRepository(rootURL: legacy)
+        try await legacyRepository.bootstrap()
+        let managed = try ProfileManager.createManagedProfile(alias: "관리", provider: .codex, repositoryRoot: legacy)
+        try Data("{}".utf8).write(to: managed.codexHomePath.appendingPathComponent("auth.json"))
+        let external = ProfileManager.defaultProfile(alias: "기본", provider: .codex)
+        _ = try await legacyRepository.save(QuotaBarPreferences(profiles: [managed, external], primaryAccountID: managed.id, launchAtLogin: true))
+
+        let repository = AccountRepository(rootURL: root, legacyRootURL: legacy)
+        try await repository.bootstrap()
+        let preferences = await repository.currentPreferences()
+        try expect(!FileManager.default.fileExists(atPath: legacy.path), "legacy folder moved")
+        try expect(preferences.primaryAccountID == managed.id && preferences.launchAtLogin, "settings carried over")
+        let movedHome = preferences.profiles.first { $0.id == managed.id }?.codexHomePath
+        try expect(movedHome?.path.hasPrefix(root.path + "/") == true, "managed path rewritten")
+        try expect(FileManager.default.fileExists(atPath: movedHome?.appendingPathComponent("auth.json").path ?? ""), "profile files moved")
+        try expect(preferences.profiles.first { $0.id == external.id }?.codexHomePath == external.codexHomePath, "external path untouched")
+        if let moved = preferences.profiles.first(where: { $0.id == managed.id }) {
+            try ProfileManager.removeManagedProfile(moved, repositoryRoot: root)
+        }
+
+        // Once QuotaBar exists, a leftover CodexBar folder is left alone.
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try await AccountRepository(rootURL: root, legacyRootURL: legacy).bootstrap()
+        try expect(FileManager.default.fileExists(atPath: legacy.path), "no second migration")
     }
 
     private static func testProfileProviderDecoding() throws {
@@ -277,7 +309,7 @@ struct CodexBarUnitRunner {
     }
 
     private static func testManagedClaudeProfileLifecycle() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CodexBarTests-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("QuotaBarTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let profile = try ProfileManager.createManagedProfile(alias: " 회사 Max ", provider: .claude, repositoryRoot: root)
         try expect(profile.provider == .claude, "provider")
@@ -363,7 +395,7 @@ struct CodexBarUnitRunner {
     /// Exercises the scratch-profile renewal against a stand-in CLI and file-backed
     /// credentials, so no real login or Keychain item is involved.
     private static func testClaudeScratchRenewal() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CodexBarTests-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("QuotaBarTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let profile = try ProfileManager.createManagedProfile(alias: "renewal", provider: .claude, repositoryRoot: root)
         let live = profile.codexHomePath.appendingPathComponent(".credentials.json")
@@ -435,7 +467,7 @@ struct CodexBarUnitRunner {
         do {
             _ = try await transient.usableCredentials(rejecting: nil)
             throw TestFailure("transient failure must throw")
-        } catch let error as CodexBarError {
+        } catch let error as QuotaBarError {
             try expect(error == .claudeTokenRenewalFailed, "transient failure is not a sign-out")
         }
         let afterTransient = try Data(contentsOf: live)
@@ -448,7 +480,7 @@ struct CodexBarUnitRunner {
         do {
             _ = try await ClaudeUsageClient(profile: profile, executableURL: fakeCLI).usableCredentials(rejecting: nil)
             throw TestFailure("revoked grant must throw")
-        } catch let error as CodexBarError {
+        } catch let error as QuotaBarError {
             try expect(error == .authenticationRequired, "invalid_grant needs sign-in")
         }
         let afterRevoked = try Data(contentsOf: live)

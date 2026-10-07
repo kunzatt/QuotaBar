@@ -4,7 +4,7 @@ import ServiceManagement
 
 @MainActor
 final class UsageStore: ObservableObject {
-    @Published private(set) var preferences = CodexBarPreferences()
+    @Published private(set) var preferences = QuotaBarPreferences()
     @Published private(set) var snapshots: [UUID: AccountUsageSnapshot] = [:]
     @Published private(set) var isBootstrapped = false
     @Published var transientMessage: String?
@@ -55,6 +55,7 @@ final class UsageStore: ObservableObject {
                     snapshots[profile.id] = AccountUsageSnapshot(accountID: profile.id)
                 }
                 isBootstrapped = true
+                restoreLaunchAtLogin()
                 restartPolling()
                 await refreshAll(includeUsage: true)
             } catch {
@@ -151,7 +152,7 @@ final class UsageStore: ObservableObject {
 
     func addManagedAccount(alias: String, provider: AccountProvider) async throws -> (AccountProfile, AccountLogin) {
         let cleanAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanAlias.isEmpty else { throw CodexBarError.invalidLoginResponse }
+        guard !cleanAlias.isEmpty else { throw QuotaBarError.invalidLoginResponse }
         let root = await repository.rootDirectory()
         let profile = try ProfileManager.createManagedProfile(alias: cleanAlias, provider: provider, repositoryRoot: root)
         preferences.profiles.append(profile)
@@ -182,9 +183,9 @@ final class UsageStore: ObservableObject {
     /// the profile. This also works for an external ~/.codex or ~/.claude profile, but changes
     /// only happen after the user completes the flow in their browser.
     func beginReauthentication(profile: AccountProfile) async throws -> AccountLogin {
-        guard profiles.contains(where: { $0.id == profile.id }) else { throw CodexBarError.invalidLoginResponse }
+        guard profiles.contains(where: { $0.id == profile.id }) else { throw QuotaBarError.invalidLoginResponse }
         // The menu-bar window and the Settings sheet can both ask; one login per account.
-        guard !authenticatingAccountIDs.contains(profile.id) else { throw CodexBarError.loginInProgress }
+        guard !authenticatingAccountIDs.contains(profile.id) else { throw QuotaBarError.loginInProgress }
         authenticatingAccountIDs.insert(profile.id)
         updateSnapshot(profile.id) { snapshot in
             snapshot.connectionState = .authenticating
@@ -309,6 +310,13 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// The login item belongs to the app's bundle identifier, which changed with the
+    /// QuotaBar rename. Register again when the saved preference says it should be on.
+    private func restoreLaunchAtLogin() {
+        guard preferences.launchAtLogin, SMAppService.mainApp.status != .enabled else { return }
+        try? SMAppService.mainApp.register()
+    }
+
     private func restartPolling() {
         let activeProfiles = profiles
         Task { [weak self, polling] in
@@ -343,11 +351,11 @@ final class UsageStore: ObservableObject {
     }
 
     private func friendly(_ error: Error) -> String {
-        if let codexError = error as? CodexBarError { return codexError.errorDescription ?? "알 수 없는 오류" }
+        if let codexError = error as? QuotaBarError { return codexError.errorDescription ?? "알 수 없는 오류" }
         return "사용량 정보를 불러오지 못했습니다."
     }
 
     private func isAuthenticationError(_ error: Error) -> Bool {
-        (error as? CodexBarError) == .authenticationRequired
+        (error as? QuotaBarError) == .authenticationRequired
     }
 }

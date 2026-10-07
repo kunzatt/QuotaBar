@@ -30,7 +30,7 @@ actor ClaudeExecutableLocator {
             resolved = shellMatch
             return shellMatch
         }
-        throw CodexBarError.claudeExecutableNotFound
+        throw QuotaBarError.claudeExecutableNotFound
     }
 
     /// Version managers such as nvm or fnm usually add their PATH in the interactive shell setup.
@@ -58,7 +58,7 @@ enum ClaudeProfilePaths {
     /// item Claude Code creates for it can be found again and deleted.
     static var renewalRoot: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("CodexBar", isDirectory: true)
+            .appendingPathComponent("QuotaBar", isDirectory: true)
             .appendingPathComponent("ClaudeRenewal", isDirectory: true)
     }
 
@@ -188,7 +188,7 @@ enum ClaudeCredentialStore {
         case .keychain(let service):
             let account = await keychainAccount(service: service) ?? NSUserName()
             guard !account.contains("\""), !account.contains("\n"), !service.contains("\"") else {
-                throw CodexBarError.claudeTokenRenewalFailed
+                throw QuotaBarError.claudeTokenRenewalFailed
             }
             let hex = data.map { String(format: "%02x", $0) }.joined()
             let command = "add-generic-password -U -a \"\(account)\" -s \"\(service)\" -X \"\(hex)\"\n"
@@ -209,7 +209,7 @@ enum ClaudeCredentialStore {
                     timeout: .seconds(10)
                 )
             }
-            guard output.status == 0 else { throw CodexBarError.claudeTokenRenewalFailed }
+            guard output.status == 0 else { throw QuotaBarError.claudeTokenRenewalFailed }
         }
     }
 
@@ -226,6 +226,20 @@ enum ClaudeCredentialStore {
         guard let range = text.range(of: #""acct"<blob>="[^"\n]*""#, options: .regularExpression) else { return nil }
         let attribute = text[range]
         return String(attribute.dropFirst(#""acct"<blob>=""#.count).dropLast())
+    }
+
+    /// Re-files an app-managed login under the Keychain item for its new folder path.
+    static func moveManagedItem(fromConfigDirectory old: String, toConfigDirectory new: String) async {
+        guard let document = await readDocument(configDirectory: old),
+              case .keychain = document.source else { return }
+        let target = ClaudeCredentialSource.keychain(service: keychainService(configDirectory: new))
+        do {
+            try await write(document.value, to: target)
+        } catch {
+            return
+        }
+        guard await readDocument(configDirectory: new)?.value == document.value else { return }
+        await deleteManagedItem(configDirectory: old)
     }
 
     /// For app-managed profiles whose CLI logout could not run, and for renewal scratch
@@ -540,7 +554,7 @@ actor ClaudeUsageClient {
            Date.now.timeIntervalSince(lastFetchedAt) < Self.minimumFetchInterval {
             return cachedResult
         }
-        if let usageRetryAt, Date.now < usageRetryAt { throw CodexBarError.claudeUsageRateLimited }
+        if let usageRetryAt, Date.now < usageRetryAt { throw QuotaBarError.claudeUsageRateLimited }
         let generation = loginGeneration
 
         var credentials = try await usableCredentials(rejecting: nil)
@@ -553,7 +567,7 @@ actor ClaudeUsageClient {
             do {
                 usage = try await fetchUsage(accessToken: credentials.accessToken)
             } catch UsageFailure.unauthorized {
-                throw CodexBarError.authenticationRequired
+                throw QuotaBarError.authenticationRequired
             } catch UsageFailure.rateLimited(let retryAfter) {
                 throw backOffUsage(retryAfter: retryAfter)
             }
@@ -631,7 +645,7 @@ actor ClaudeUsageClient {
             try? await Task.sleep(for: .milliseconds(500))
         }
         guard activeLoginID == loginID, !loginWasCancelled else { throw CancellationError() }
-        if let status = loginExitStatus, status != 0 { throw CodexBarError.invalidLoginResponse }
+        if let status = loginExitStatus, status != 0 { throw QuotaBarError.invalidLoginResponse }
 
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(600))
@@ -658,7 +672,7 @@ actor ClaudeUsageClient {
         }
         // A new login may belong to a different claude.ai account.
         resetAccountState()
-        guard await readCredentials()?.isUsable(at: .now) == true else { throw CodexBarError.authenticationRequired }
+        guard await readCredentials()?.isUsable(at: .now) == true else { throw QuotaBarError.authenticationRequired }
     }
 
     func cancelLogin(loginID: String) {
@@ -713,7 +727,7 @@ actor ClaudeUsageClient {
         renewalFailureFingerprint = nil
     }
 
-    private func backOffUsage(retryAfter: TimeInterval?) -> CodexBarError {
+    private func backOffUsage(retryAfter: TimeInterval?) -> QuotaBarError {
         usageRateLimitCount = min(5, usageRateLimitCount + 1)
         let backoff = min(3_600, 300 * pow(2, Double(usageRateLimitCount - 1)))
         usageRetryAt = Date.now.addingTimeInterval(max(retryAfter ?? 0, backoff))
@@ -724,16 +738,16 @@ actor ClaudeUsageClient {
     /// expiry or was just rejected.
     func usableCredentials(rejecting rejectedToken: String?) async throws -> ClaudeOAuthCredentials {
         guard let document = await ClaudeCredentialStore.readDocument(configDirectory: configDirectory),
-              let current = document.credentials else { throw CodexBarError.authenticationRequired }
+              let current = document.credentials else { throw QuotaBarError.authenticationRequired }
         let isRejected = rejectedToken != nil && current.accessToken == rejectedToken
         if !isRejected, current.isUsable(at: .now, margin: Self.renewAhead) { return current }
         let stillValid = !isRejected && current.isUsable(at: .now, margin: 0)
 
         if let renewalRetryAt, Date.now < renewalRetryAt, renewalFailureFingerprint == current.fingerprint {
             if stillValid { return current }
-            throw renewalFailureRequiresLogin ? CodexBarError.authenticationRequired : CodexBarError.claudeTokenRenewalFailed
+            throw renewalFailureRequiresLogin ? QuotaBarError.authenticationRequired : QuotaBarError.claudeTokenRenewalFailed
         }
-        guard let oauth = document.oauth, current.hasRefreshToken else { throw CodexBarError.authenticationRequired }
+        guard let oauth = document.oauth, current.hasRefreshToken else { throw QuotaBarError.authenticationRequired }
 
         let executable = try await locateExecutable()
         let outcome = await renewInScratchProfile(oauth: oauth, previousAccessToken: current.accessToken, executable: executable)
@@ -741,7 +755,7 @@ actor ClaudeUsageClient {
         // Claude Code may have renewed the token, or the user may have signed in again,
         // while the scratch renewal ran. Never write over that newer login.
         guard let latest = await ClaudeCredentialStore.readDocument(configDirectory: configDirectory) else {
-            throw CodexBarError.authenticationRequired
+            throw QuotaBarError.authenticationRequired
         }
         if latest.value != document.value {
             if let latestCredentials = latest.credentials,
@@ -749,7 +763,7 @@ actor ClaudeUsageClient {
                latestCredentials.isUsable(at: .now) {
                 return latestCredentials
             }
-            throw CodexBarError.claudeTokenRenewalFailed
+            throw QuotaBarError.claudeTokenRenewalFailed
         }
 
         switch outcome {
@@ -760,7 +774,7 @@ actor ClaudeUsageClient {
             updated["claudeAiOauth"] = .object(merged)
             try await ClaudeCredentialStore.write(.object(updated), to: document.source)
             guard let written = await readCredentials(), written.accessToken == fresh["accessToken"]?.string else {
-                throw CodexBarError.claudeTokenRenewalFailed
+                throw QuotaBarError.claudeTokenRenewalFailed
             }
             renewalRetryAt = nil
             renewalFailureCount = 0
@@ -773,7 +787,7 @@ actor ClaudeUsageClient {
             renewalFailureRequiresLogin = loginRequired
             renewalFailureFingerprint = current.fingerprint
             if stillValid { return current }
-            throw loginRequired ? CodexBarError.authenticationRequired : CodexBarError.claudeTokenRenewalFailed
+            throw loginRequired ? QuotaBarError.authenticationRequired : QuotaBarError.claudeTokenRenewalFailed
         }
     }
 
@@ -846,13 +860,13 @@ actor ClaudeUsageClient {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("CodexBar", forHTTPHeaderField: "User-Agent")
+        request.setValue("QuotaBar", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw CodexBarError.malformedResponse }
+        guard let http = response as? HTTPURLResponse else { throw QuotaBarError.malformedResponse }
         switch http.statusCode {
         case 200..<300:
             guard let usage = try? JSONDecoder().decode(JSONValue.self, from: data), usage.object != nil else {
-                throw CodexBarError.malformedResponse
+                throw QuotaBarError.malformedResponse
             }
             return usage
         case 401:
@@ -861,7 +875,7 @@ actor ClaudeUsageClient {
             throw UsageFailure.rateLimited(retryAfter: Self.retryAfterSeconds(http.value(forHTTPHeaderField: "Retry-After")))
         default:
             // 403 means a scope or organisation policy problem, which signing in again would not fix.
-            throw CodexBarError.server("usage request failed with HTTP \(http.statusCode)")
+            throw QuotaBarError.server("usage request failed with HTTP \(http.statusCode)")
         }
     }
 
@@ -929,7 +943,7 @@ actor ClaudeUsageClient {
 
     private func finishedLoginResult() throws {
         if loginWasCancelled { throw CancellationError() }
-        guard loginExitStatus == 0 else { throw CodexBarError.authenticationRequired }
+        guard loginExitStatus == 0 else { throw QuotaBarError.authenticationRequired }
     }
 
     private func timeoutLogin(loginID: String) {

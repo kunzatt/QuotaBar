@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_dir=${0:A:h:h}
-bundle_path="$project_dir/dist/CodexBar.app"
+bundle_path="$project_dir/dist/QuotaBar.app"
 
 "$project_dir/scripts/package-app.sh"
 
@@ -12,7 +12,7 @@ if [[ -z "$version" ]]; then
   exit 1
 fi
 
-archive_path="$project_dir/dist/CodexBar-${version}-arm64.zip"
+archive_path="$project_dir/dist/QuotaBar-${version}-arm64.zip"
 if [[ -e "$archive_path" ]]; then
   print -u2 "Release archive already exists: $archive_path"
   print -u2 "Bump the app version before creating a new release archive."

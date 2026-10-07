@@ -1,5 +1,11 @@
 import Foundation
 
+enum AppInfo {
+    static var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
+}
+
 enum AccountProvider: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
     case codex
     case claude
@@ -264,7 +270,7 @@ struct AccountUsageSnapshot: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
-struct CodexBarPreferences: Codable, Sendable {
+struct QuotaBarPreferences: Codable, Sendable {
     var profiles: [AccountProfile] = []
     var primaryAccountID: UUID?
     var customCodexExecutablePath: URL?
@@ -302,7 +308,7 @@ struct ProviderRefreshResult: Sendable {
     let tokenSummary: TokenUsageSummary?
 }
 
-enum CodexBarError: LocalizedError, Sendable, Equatable {
+enum QuotaBarError: LocalizedError, Sendable, Equatable {
     case executableNotFound
     case executableNotUsable(URL)
     case claudeExecutableNotFound

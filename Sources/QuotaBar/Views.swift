@@ -58,7 +58,7 @@ struct UsagePopoverView: View {
         }
         .frame(width: 420, height: 590)
         .background(Color(nsColor: .windowBackgroundColor))
-        .alert("CodexBar", isPresented: Binding(
+        .alert("QuotaBar", isPresented: Binding(
             get: { store.transientMessage != nil },
             set: { if !$0 { store.transientMessage = nil } }
         )) {
@@ -75,7 +75,7 @@ private struct PopoverHeader: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("CODEXBAR")
+                Text("QUOTABAR")
                     .font(.caption2.weight(.bold))
                     .tracking(0.8)
                     .foregroundStyle(.secondary)
@@ -115,7 +115,7 @@ private struct PopoverFooter: View {
                 Button(role: .destructive) {
                     NSApp.terminate(nil)
                 } label: {
-                    Label("CodexBar 종료", systemImage: "power")
+                    Label("QuotaBar 종료", systemImage: "power")
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -236,7 +236,7 @@ private struct PrimaryQuotaCard: View {
                         StatusLabel(snapshot: snapshot)
                         Text("·")
                             .foregroundStyle(.tertiary)
-                        Text(CodexBarFormatters.fetchedText(snapshot?.fetchedAt))
+                        Text(QuotaBarFormatters.fetchedText(snapshot?.fetchedAt))
                             .lineLimit(1)
                     }
                     .font(.caption)
@@ -466,16 +466,16 @@ private struct QuotaWindowRow: View {
             ProgressView(value: Double(window.remainingPercent), total: 100)
                 .tint(usageColor(window.remainingPercent))
             HStack {
-                Text(CodexBarFormatters.windowText(window.windowDurationMinutes))
+                Text(QuotaBarFormatters.windowText(window.windowDurationMinutes))
                 Spacer()
-                Text("초기화 \(CodexBarFormatters.resetText(window.resetsAt))")
+                Text("초기화 \(QuotaBarFormatters.resetText(window.resetsAt))")
                     .lineLimit(1)
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title) 제한, \(window.remainingPercent)퍼센트 남음, 초기화 \(CodexBarFormatters.resetText(window.resetsAt))")
+        .accessibilityLabel("\(title) 제한, \(window.remainingPercent)퍼센트 남음, 초기화 \(QuotaBarFormatters.resetText(window.resetsAt))")
     }
 }
 
@@ -488,7 +488,7 @@ private struct TokenSummaryCard: View {
                 .font(.subheadline.weight(.semibold))
             HStack(spacing: 0) {
                 TokenMetric(
-                    label: CodexBarFormatters.dailyUsageLabel(for: summary.latestDailyBucket?.startDate),
+                    label: QuotaBarFormatters.dailyUsageLabel(for: summary.latestDailyBucket?.startDate),
                     value: summary.latestDailyBucket?.tokens
                 )
                 Divider().frame(height: 30)
@@ -511,9 +511,9 @@ private struct TokenMetric: View {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Text(CodexBarFormatters.tokenText(value))
+            Text(QuotaBarFormatters.tokenText(value))
                 .font(.subheadline.weight(.medium).monospacedDigit())
-                .help(CodexBarFormatters.fullTokenText(value))
+                .help(QuotaBarFormatters.fullTokenText(value))
         }
         .frame(maxWidth: .infinity)
     }
@@ -607,7 +607,7 @@ struct AddAccountView: View {
         VStack(spacing: 0) {
             SheetHeader(
                 title: "계정 연결",
-                subtitle: login == nil ? "Codex 또는 Claude Code 계정을 CodexBar에 추가합니다" : "브라우저에서 로그인을 완료하세요",
+                subtitle: login == nil ? "Codex 또는 Claude Code 계정을 QuotaBar에 추가합니다" : "브라우저에서 로그인을 완료하세요",
                 symbol: "person.badge.plus",
                 dismiss: login == nil && !isStarting ? onClose : nil
             )
@@ -660,8 +660,8 @@ struct AddAccountView: View {
 
             Label {
                 Text(provider == .codex
-                    ? "계정마다 별도 로컬 프로필을 사용합니다. CodexBar는 인증 파일 내용을 읽지 않습니다."
-                    : "계정마다 별도 Claude Code 설정 폴더를 사용합니다. 로그인과 토큰 갱신은 Claude Code가 하고, CodexBar는 사용량 조회에만 토큰을 씁니다.")
+                    ? "계정마다 별도 로컬 프로필을 사용합니다. QuotaBar는 인증 파일 내용을 읽지 않습니다."
+                    : "계정마다 별도 Claude Code 설정 폴더를 사용합니다. 로그인과 토큰 갱신은 Claude Code가 하고, QuotaBar는 사용량 조회에만 토큰을 씁니다.")
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
                 Image(systemName: "lock.shield")
@@ -1163,7 +1163,7 @@ private struct SettingsSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("CodexBar")
+            Text("QuotaBar")
                 .font(.headline)
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
@@ -1189,7 +1189,7 @@ private struct SettingsSidebar: View {
 
             Spacer()
 
-            Text("CodexBar 0.1.4")
+            Text("QuotaBar \(AppInfo.version)")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, 10)
@@ -1430,7 +1430,7 @@ private struct AccountSettingsRow: View {
 
     private var statusDetail: String {
         let status = snapshot?.connectionState.displayName ?? "대기 중"
-        let fetched = CodexBarFormatters.fetchedText(snapshot?.fetchedAt)
+        let fetched = QuotaBarFormatters.fetchedText(snapshot?.fetchedAt)
         return "\(status) · 마지막 갱신 \(fetched)"
     }
 
@@ -1477,12 +1477,12 @@ private struct GeneralSettingsPage: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("로그인 시 자동 실행")
                             .font(.subheadline.weight(.medium))
-                        Text("Mac에 로그인하면 CodexBar를 메뉴바에서 시작합니다.")
+                        Text("Mac에 로그인하면 QuotaBar를 메뉴바에서 시작합니다.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Toggle("로그인 시 CodexBar 실행", isOn: Binding(
+                    Toggle("로그인 시 QuotaBar 실행", isOn: Binding(
                         get: { store.preferences.launchAtLogin },
                         set: { store.setLaunchAtLogin($0) }
                     ))
@@ -1571,7 +1571,7 @@ private func activeResetSummary(_ snapshot: AccountUsageSnapshot?) -> String {
     guard let window = snapshot?.activeCodexWindow else {
         return snapshot?.connectionState.displayName ?? "사용량을 불러오는 중"
     }
-    return "\(quotaWindowTitle(window)) · 초기화 \(CodexBarFormatters.resetText(window.resetsAt))"
+    return "\(quotaWindowTitle(window)) · 초기화 \(QuotaBarFormatters.resetText(window.resetsAt))"
 }
 
 private func planBadgeText(profile: AccountProfile, snapshot: AccountUsageSnapshot?) -> String {
@@ -1603,7 +1603,7 @@ private func remainingAccessibilityText(_ remaining: Int?, window: RateLimitWind
 
 private func quotaWindowTitle(_ window: RateLimitWindow?) -> String {
     guard let minutes = window?.windowDurationMinutes, minutes > 0 else { return "사용량 한도" }
-    return "\(CodexBarFormatters.windowText(minutes)) 한도"
+    return "\(QuotaBarFormatters.windowText(minutes)) 한도"
 }
 
 private func usageColor(_ remaining: Int?) -> Color {

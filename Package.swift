@@ -2,15 +2,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "CodexBar",
+    name: "QuotaBar",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "CodexBar", targets: ["CodexBar"])
+        .executable(name: "QuotaBar", targets: ["QuotaBar"])
     ],
     targets: [
         .executableTarget(
-            name: "CodexBar",
-            path: "Sources/CodexBar"
+            name: "QuotaBar",
+            path: "Sources/QuotaBar"
         )
     ]
 )
