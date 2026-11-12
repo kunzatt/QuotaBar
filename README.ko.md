@@ -41,7 +41,7 @@ brew upgrade --cask quotabar
 
 **그래도 열기**가 없으면 앱 실행을 다시 시도한 뒤 설정을 확인하세요. 회사 관리 Mac은 IT 관리자 승인이 필요할 수 있습니다. “컴퓨터를 손상시킴” 또는 “앱이 손상됨” 경고는 개발자 미확인 경고와 다르므로 실행을 멈추고 다운로드를 확인하세요. Gatekeeper를 전역으로 끄지 마세요.
 
-[Apple 공식 안내](https://support.apple.com/en-us/102445)를 참고하세요. 향후 배포본에서 개발자 미확인 문제를 없애려면 제작자의 Developer ID 서명과 Apple 공증이 필요합니다. 문서 수정으로 기존 배포본의 서명이나 공증 상태가 바뀌지는 않습니다.
+[Apple 공식 안내](https://support.apple.com/en-us/102445)를 참고하세요. 향후 배포본에서 개발자 미확인 문제를 없애려면 제작자의 Developer ID 서명과 Apple 공증이 필요합니다.
 
 ### CodexBar에서 옮겨오기
 

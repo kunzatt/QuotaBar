@@ -41,7 +41,7 @@ If you trust the copy downloaded from [this repository’s Releases](https://git
 
 If **Open Anyway** is missing, try opening the app again and return to Settings. A managed Mac may require approval from your IT administrator. If the alert says the app **will damage your computer** or **is damaged**, stop and check the download instead of treating it as an unidentified-developer warning. Do not disable Gatekeeper globally.
 
-See [Apple’s instructions for opening apps safely](https://support.apple.com/en-us/102445). To remove the unidentified-developer obstacle for future releases, the maintainer needs to distribute a Developer ID-signed and Apple-notarized build; this README change does not sign or notarize existing downloads.
+See [Apple’s instructions for opening apps safely](https://support.apple.com/en-us/102445). To remove the unidentified-developer obstacle for future releases, the maintainer needs to distribute a Developer ID-signed and Apple-notarized build.
 
 ### Moving from CodexBar
 
